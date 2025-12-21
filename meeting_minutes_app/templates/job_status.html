@@ -1,0 +1,444 @@
+{% extends "base.html" %}
+
+{% block title %}Job Status - Meeting Minutes Generator{% endblock %}
+
+{% block extra_css %}
+<style>
+    .status-card {
+        background: white;
+        padding: 30px;
+        border-radius: 10px;
+        margin-bottom: 20px;
+    }
+
+    .progress-container {
+        margin: 30px 0;
+    }
+
+    .progress-bar-bg {
+        background: #e0e0e0;
+        border-radius: 10px;
+        height: 30px;
+        overflow: hidden;
+        position: relative;
+    }
+
+    .progress-bar {
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        height: 100%;
+        transition: width 0.5s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-weight: bold;
+    }
+
+    .status-badge {
+        display: inline-block;
+        padding: 8px 16px;
+        border-radius: 20px;
+        font-weight: bold;
+        font-size: 14px;
+        margin-bottom: 20px;
+    }
+
+    .status-queued {
+        background: #fff3cd;
+        color: #856404;
+    }
+
+    .status-running {
+        background: #cfe2ff;
+        color: #084298;
+    }
+
+    .status-completed {
+        background: #d1e7dd;
+        color: #0f5132;
+    }
+
+    .status-error {
+        background: #f8d7da;
+        color: #842029;
+    }
+
+    .info-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+        margin: 20px 0;
+    }
+
+    .info-item {
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 4px solid #667eea;
+    }
+
+    .info-item .label {
+        font-size: 12px;
+        color: #777;
+        text-transform: uppercase;
+        margin-bottom: 5px;
+    }
+
+    .info-item .value {
+        font-size: 18px;
+        font-weight: bold;
+        color: #333;
+    }
+
+    .stage-text {
+        font-size: 16px;
+        color: #555;
+        margin: 15px 0;
+        padding: 15px;
+        background: #f8f9fa;
+        border-radius: 5px;
+        border-left: 4px solid #667eea;
+    }
+
+    .download-section {
+        margin-top: 30px;
+        padding: 20px;
+        background: #d1e7dd;
+        border-radius: 8px;
+        border: 2px solid #0f5132;
+    }
+
+    .download-section h3 {
+        color: #0f5132;
+        margin-bottom: 15px;
+    }
+
+    .download-links {
+        display: flex;
+        gap: 15px;
+        flex-wrap: wrap;
+    }
+
+    .download-btn {
+        background: #0f5132;
+        color: white;
+        padding: 12px 24px;
+        border-radius: 5px;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        transition: background 0.3s;
+    }
+
+    .download-btn:hover {
+        background: #0a3622;
+    }
+
+    .error-section {
+        margin-top: 20px;
+        padding: 20px;
+        background: #f8d7da;
+        border-radius: 8px;
+        border: 2px solid #842029;
+    }
+
+    .error-section h3 {
+        color: #842029;
+        margin-bottom: 10px;
+    }
+
+    .error-section pre {
+        background: white;
+        padding: 15px;
+        border-radius: 5px;
+        overflow-x: auto;
+        color: #842029;
+    }
+
+    .spinner {
+        border: 4px solid #f3f3f3;
+        border-top: 4px solid #667eea;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        animation: spin 1s linear infinite;
+        display: inline-block;
+        margin-right: 15px;
+    }
+
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+
+    .processing-indicator {
+        display: flex;
+        align-items: center;
+        margin: 20px 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card status-card">
+    <h1>Job Status</h1>
+    
+    <div id="status-badge" class="status-badge status-{{ job.status }}">
+        {{ job.status.upper() }}
+    </div>
+
+    <div class="info-grid">
+        <div class="info-item">
+            <div class="label">File Name</div>
+            <div class="value" style="font-size: 14px;">{{ job.original_filename }}</div>
+        </div>
+        <div class="info-item">
+            <div class="label">Job ID</div>
+            <div class="value" style="font-size: 12px; word-break: break-all;">{{ job.id }}</div>
+        </div>
+        <div class="info-item">
+            <div class="label">Duration</div>
+            <div class="value" id="duration-display">
+                {% if job.duration_seconds %}
+                    {{ "%.1f"|format(job.duration_seconds / 60) }} min
+                {% else %}
+                    Calculating...
+                {% endif %}
+            </div>
+        </div>
+        <div class="info-item">
+            <div class="label">Time Remaining</div>
+            <div class="value" id="time-remaining">Calculating...</div>
+        </div>
+    </div>
+
+    <div id="processing-section" style="display: {% if job.status == 'running' %}block{% else %}none{% endif %};">
+        <div class="processing-indicator">
+            <div class="spinner"></div>
+            <span style="font-weight: bold; font-size: 18px;">Processing your audio...</span>
+        </div>
+    </div>
+
+    <div class="progress-container">
+        <div class="progress-bar-bg">
+            <div class="progress-bar" id="progress-bar" style="width: {{ job.progress_percent or 0 }}%;">
+                <span id="progress-text">{{ job.progress_percent or 0 }}%</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="stage-text" id="stage-text">
+        {{ job.current_stage or 'Initializing...' }}
+    </div>
+
+    <div class="info-grid">
+        <div class="info-item">
+            <div class="label">Created</div>
+            <div class="value" style="font-size: 14px;" id="created-time">
+                {{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') if job.created_at else 'N/A' }}
+            </div>
+        </div>
+        <div class="info-item">
+            <div class="label">Elapsed Time</div>
+            <div class="value" id="elapsed-time">0s</div>
+        </div>
+        <div class="info-item" id="chunks-info" style="display: {% if job.total_chunks %}block{% else %}none{% endif %};">
+            <div class="label">Progress</div>
+            <div class="value" id="chunks-text">
+                {{ job.current_chunk or 0 }} / {{ job.total_chunks or 0 }} chunks
+            </div>
+        </div>
+    </div>
+
+    <div id="download-section" style="display: {% if job.status == 'completed' %}block{% else %}none{% endif %};">
+        <div class="download-section">
+            <h3>✅ Processing Complete!</h3>
+            <p style="margin-bottom: 15px;">Your files are ready to download:</p>
+            <div class="download-links">
+                {% if job.conversation_path %}
+                <a href="{{ url_for('download_file', job_id=job.id, file_type='conversation') }}" class="download-btn">
+                    📄 Download Transcript
+                </a>
+                {% endif %}
+                {% if job.minutes_path %}
+                <a href="{{ url_for('download_file', job_id=job.id, file_type='minutes') }}" class="download-btn">
+                    📋 Download Minutes
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div id="error-section" style="display: {% if job.status == 'error' %}block{% else %}none{% endif %};">
+        <div class="error-section">
+            <h3>❌ Processing Error</h3>
+            <p>An error occurred while processing your file:</p>
+            <pre id="error-text">{{ job.error or 'Unknown error' }}</pre>
+            <p style="margin-top: 15px;">
+                <a href="{{ url_for('index') }}" class="btn">Try Again</a>
+            </p>
+        </div>
+    </div>
+
+    <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
+        <p style="color: #777; font-size: 14px;">
+            💡 <strong>Tip:</strong> This page updates automatically. You can bookmark this URL and come back later 
+            - processing continues on the server even if you close this page.
+        </p>
+        {% if current_user.is_authenticated %}
+        <p style="margin-top: 10px;">
+            <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">← Back to Dashboard</a>
+        </p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const jobId = "{{ job.id }}";
+    let startTime = null;
+    let updateInterval = null;
+
+    function formatTime(seconds) {
+        if (!seconds || seconds < 0) return 'Calculating...';
+        
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+        
+        if (hours > 0) {
+            return `${hours}h ${minutes}m ${secs}s`;
+        } else if (minutes > 0) {
+            return `${minutes}m ${secs}s`;
+        } else {
+            return `${secs}s`;
+        }
+    }
+
+    function formatDuration(seconds) {
+        if (!seconds) return 'Calculating...';
+        const minutes = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${minutes}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    async function updateJobStatus() {
+        try {
+            const response = await fetch(`/api/status/${jobId}`);
+            const data = await response.json();
+            
+            // Update status badge
+            const statusBadge = document.getElementById('status-badge');
+            statusBadge.className = `status-badge status-${data.status}`;
+            statusBadge.textContent = data.status.toUpperCase();
+            
+            // Update progress bar
+            const progressBar = document.getElementById('progress-bar');
+            const progressText = document.getElementById('progress-text');
+            const percent = data.progress_percent || 0;
+            progressBar.style.width = percent + '%';
+            progressText.textContent = percent + '%';
+            
+            // Update stage
+            document.getElementById('stage-text').textContent = data.current_stage || 'Processing...';
+            
+            // Update chunks info
+            if (data.total_chunks) {
+                document.getElementById('chunks-info').style.display = 'block';
+                document.getElementById('chunks-text').textContent = 
+                    `${data.current_chunk || 0} / ${data.total_chunks} chunks`;
+            }
+            
+            // Update duration
+            if (data.duration_seconds) {
+                document.getElementById('duration-display').textContent = 
+                    (data.duration_seconds / 60).toFixed(1) + ' min';
+            }
+            
+            // Update time remaining
+            const timeRemaining = document.getElementById('time-remaining');
+            if (data.status === 'running' && data.estimated_time_remaining) {
+                timeRemaining.textContent = formatTime(data.estimated_time_remaining);
+            } else if (data.status === 'completed') {
+                timeRemaining.textContent = 'Complete!';
+            } else {
+                timeRemaining.textContent = 'Calculating...';
+            }
+            
+            // Update elapsed time
+            if (data.created_at) {
+                if (!startTime) {
+                    startTime = new Date(data.created_at).getTime();
+                }
+                const now = Date.now();
+                const elapsed = Math.floor((now - startTime) / 1000);
+                document.getElementById('elapsed-time').textContent = formatTime(elapsed);
+            }
+            
+            // Show/hide sections based on status
+            const processingSection = document.getElementById('processing-section');
+            const downloadSection = document.getElementById('download-section');
+            const errorSection = document.getElementById('error-section');
+            
+            processingSection.style.display = data.status === 'running' ? 'block' : 'none';
+            
+            if (data.status === 'completed') {
+                downloadSection.style.display = 'block';
+                
+                // Update download links
+                const downloadLinks = document.querySelector('.download-links');
+                downloadLinks.innerHTML = '';
+                
+                if (data.outputs.conversation) {
+                    const transcriptBtn = document.createElement('a');
+                    transcriptBtn.href = `/download/${jobId}/conversation`;
+                    transcriptBtn.className = 'download-btn';
+                    transcriptBtn.innerHTML = '📄 Download Transcript';
+                    downloadLinks.appendChild(transcriptBtn);
+                }
+                
+                if (data.outputs.minutes) {
+                    const minutesBtn = document.createElement('a');
+                    minutesBtn.href = `/download/${jobId}/minutes`;
+                    minutesBtn.className = 'download-btn';
+                    minutesBtn.innerHTML = '📋 Download Minutes';
+                    downloadLinks.appendChild(minutesBtn);
+                }
+                
+                // Stop polling
+                if (updateInterval) {
+                    clearInterval(updateInterval);
+                }
+            } else if (data.status === 'error') {
+                errorSection.style.display = 'block';
+                document.getElementById('error-text').textContent = data.error || 'Unknown error';
+                
+                // Stop polling
+                if (updateInterval) {
+                    clearInterval(updateInterval);
+                }
+            }
+            
+        } catch (error) {
+            console.error('Error fetching job status:', error);
+        }
+    }
+
+    // Initial update
+    updateJobStatus();
+
+    // Poll for updates every 3 seconds
+    updateInterval = setInterval(updateJobStatus, 3000);
+
+    // Update elapsed time every second
+    setInterval(() => {
+        if (startTime) {
+            const now = Date.now();
+            const elapsed = Math.floor((now - startTime) / 1000);
+            document.getElementById('elapsed-time').textContent = formatTime(elapsed);
+        }
+    }, 1000);
+</script>
+{% endblock %}

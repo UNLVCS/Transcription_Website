@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Audio - Meeting Minutes Generator{% endblock %}
+
+{% block extra_css %}
+<style>
+    .upload-area {
+        border: 3px dashed #667eea;
+        border-radius: 10px;
+        padding: 40px;
+        text-align: center;
+        background: #f9f9ff;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+
+    .upload-area:hover {
+        background: #f0f0ff;
+        border-color: #5568d3;
+    }
+
+    .upload-area.dragover {
+        background: #e8e8ff;
+        border-color: #5568d3;
+    }
+
+    .upload-icon {
+        font-size: 48px;
+        margin-bottom: 20px;
+    }
+
+    .file-info {
+        margin-top: 20px;
+        padding: 10px;
+        background: #e8ffe8;
+        border-radius: 5px;
+        display: none;
+    }
+
+    .api-keys-section {
+        background: #fff9e6;
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+        border-left: 4px solid #ffc107;
+    }
+
+    .info-box {
+        background: #e3f2fd;
+        padding: 15px;
+        border-radius: 5px;
+        margin-bottom: 20px;
+        border-left: 4px solid #2196f3;
+    }
+
+    .info-box h3 {
+        margin-bottom: 10px;
+        color: #1976d2;
+        font-size: 18px;
+    }
+
+    .info-box ul {
+        margin-left: 20px;
+        margin-top: 10px;
+    }
+
+    .info-box li {
+        margin-bottom: 5px;
+        color: #555;
+    }
+
+    .checkbox-group {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+    }
+
+    .checkbox-group input[type="checkbox"] {
+        width: 20px;
+        height: 20px;
+        cursor: pointer;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h1>Upload Meeting Audio</h1>
+    
+    <div class="info-box">
+        <h3>🎯 How It Works</h3>
+        <ul>
+            <li>Upload any audio file (MP3, WAV, M4A, etc.) - up to 24 hours long</li>
+            <li>AI automatically transcribes and identifies speakers</li>
+            <li>Generates professional meeting minutes with action items</li>
+            <li>Processing continues even if you close the page</li>
+            <li>Files are securely stored for 30 days</li>
+        </ul>
+    </div>
+
+    <div class="api-keys-section">
+        <h3>🔑 API Keys Required</h3>
+        <p style="margin-bottom: 15px;">To process your audio, you need to provide your own API keys (stored securely in your browser):</p>
+        
+        <div class="form-group">
+            <label for="hf_token">
+                HuggingFace Token
+                <a href="https://huggingface.co/settings/tokens" target="_blank" style="font-size: 12px; margin-left: 10px;">(Get token →)</a>
+            </label>
+            <input type="text" id="hf_token" placeholder="hf_..." />
+            <p class="help-text">Required for speaker identification. Create a free token at huggingface.co</p>
+        </div>
+
+        <div class="form-group">
+            <label for="gemini_key">
+                Google Gemini API Key
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" style="font-size: 12px; margin-left: 10px;">(Get key →)</a>
+            </label>
+            <input type="text" id="gemini_key" placeholder="AIza..." />
+            <p class="help-text">Required for generating meeting minutes. Free tier available at Google AI Studio</p>
+        </div>
+
+        <div class="checkbox-group">
+            <input type="checkbox" id="save_keys" checked />
+            <label for="save_keys" style="margin: 0; font-weight: normal;">Save keys in browser for future use (recommended)</label>
+        </div>
+    </div>
+
+    <form id="upload-form" enctype="multipart/form-data">
+        <div class="upload-area" id="upload-area">
+            <div class="upload-icon">📁</div>
+            <h3>Drop your audio file here or click to browse</h3>
+            <p style="color: #777; margin-top: 10px;">Supports: MP3, WAV, M4A, OGG, FLAC and more</p>
+            <input type="file" id="audio_file" name="audio_file" accept="audio/*" style="display: none;" required />
+        </div>
+        
+        <div class="file-info" id="file-info">
+            <strong>Selected file:</strong> <span id="file-name"></span><br>
+            <strong>Size:</strong> <span id="file-size"></span>
+        </div>
+
+        <button type="submit" class="btn" id="submit-btn" style="margin-top: 20px; width: 100%;">
+            🚀 Start Processing
+        </button>
+    </form>
+</div>
+
+{% if current_user.is_authenticated %}
+<div class="card">
+    <h2>Your Recent Jobs</h2>
+    <p><a href="{{ url_for('dashboard') }}" class="btn btn-secondary">View All Jobs →</a></p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Load saved API keys
+    document.addEventListener('DOMContentLoaded', function() {
+        const savedHfToken = localStorage.getItem('hf_token');
+        const savedGeminiKey = localStorage.getItem('gemini_key');
+        
+        if (savedHfToken) {
+            document.getElementById('hf_token').value = savedHfToken;
+        }
+        if (savedGeminiKey) {
+            document.getElementById('gemini_key').value = savedGeminiKey;
+        }
+    });
+
+    // Drag and drop functionality
+    const uploadArea = document.getElementById('upload-area');
+    const fileInput = document.getElementById('audio_file');
+    const fileInfo = document.getElementById('file-info');
+    const fileName = document.getElementById('file-name');
+    const fileSize = document.getElementById('file-size');
+
+    uploadArea.addEventListener('click', () => fileInput.click());
+
+    uploadArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadArea.classList.add('dragover');
+    });
+
+    uploadArea.addEventListener('dragleave', () => {
+        uploadArea.classList.remove('dragover');
+    });
+
+    uploadArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadArea.classList.remove('dragover');
+        
+        if (e.dataTransfer.files.length) {
+            fileInput.files = e.dataTransfer.files;
+            updateFileInfo(e.dataTransfer.files[0]);
+        }
+    });
+
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length) {
+            updateFileInfo(e.target.files[0]);
+        }
+    });
+
+    function updateFileInfo(file) {
+        fileName.textContent = file.name;
+        fileSize.textContent = formatFileSize(file.size);
+        fileInfo.style.display = 'block';
+    }
+
+    function formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
+        if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+        return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+
+    // Form submission
+    document.getElementById('upload-form').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        const hfToken = document.getElementById('hf_token').value.trim();
+        const geminiKey = document.getElementById('gemini_key').value.trim();
+        const audioFile = fileInput.files[0];
+        
+        if (!audioFile) {
+            alert('Please select an audio file');
+            return;
+        }
+        
+        if (!hfToken) {
+            alert('Please enter your HuggingFace token');
+            return;
+        }
+        
+        if (!geminiKey) {
+            alert('Please enter your Gemini API key');
+            return;
+        }
+
+        // Save keys if checkbox is checked
+        if (document.getElementById('save_keys').checked) {
+            localStorage.setItem('hf_token', hfToken);
+            localStorage.setItem('gemini_key', geminiKey);
+        }
+
+        // Disable submit button
+        const submitBtn = document.getElementById('submit-btn');
+        submitBtn.disabled = true;
+        submitBtn.textContent = '⏳ Uploading...';
+
+        // Prepare form data
+        const formData = new FormData();
+        formData.append('audio_file', audioFile);
+        formData.append('hf_token', hfToken);
+        formData.append('gemini_key', geminiKey);
+
+        try {
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                // Redirect to job status page
+                window.location.href = '/job/' + data.job_id;
+            } else {
+                alert('Error: ' + (data.error || 'Upload failed'));
+                submitBtn.disabled = false;
+                submitBtn.textContent = '🚀 Start Processing';
+            }
+        } catch (error) {
+            alert('Error uploading file: ' + error.message);
+            submitBtn.disabled = false;
+            submitBtn.textContent = '🚀 Start Processing';
+        }
+    });
+</script>
+{% endblock %}
