@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Meeting Minutes Generator{% endblock %}
+
+{% block extra_css %}
+<style>
+    .dashboard-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 30px;
+    }
+
+    .jobs-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: white;
+    }
+
+    .jobs-table th {
+        background: #f8f9fa;
+        padding: 15px;
+        text-align: left;
+        font-weight: 600;
+        border-bottom: 2px solid #dee2e6;
+    }
+
+    .jobs-table td {
+        padding: 15px;
+        border-bottom: 1px solid #dee2e6;
+    }
+
+    .jobs-table tr:hover {
+        background: #f8f9fa;
+    }
+
+    .status-badge-small {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+
+    .status-queued {
+        background: #fff3cd;
+        color: #856404;
+    }
+
+    .status-running {
+        background: #cfe2ff;
+        color: #084298;
+    }
+
+    .status-completed {
+        background: #d1e7dd;
+        color: #0f5132;
+    }
+
+    .status-error {
+        background: #f8d7da;
+        color: #842029;
+    }
+
+    .job-actions {
+        display: flex;
+        gap: 10px;
+    }
+
+    .job-actions a {
+        color: #667eea;
+        text-decoration: none;
+        font-size: 14px;
+    }
+
+    .job-actions a:hover {
+        text-decoration: underline;
+    }
+
+    .empty-state {
+        text-align: center;
+        padding: 60px 20px;
+        color: #777;
+    }
+
+    .empty-state-icon {
+        font-size: 64px;
+        margin-bottom: 20px;
+    }
+
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+        margin-bottom: 30px;
+    }
+
+    .stat-card {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        border-left: 4px solid #667eea;
+    }
+
+    .stat-card .label {
+        font-size: 14px;
+        color: #777;
+        margin-bottom: 5px;
+    }
+
+    .stat-card .value {
+        font-size: 28px;
+        font-weight: bold;
+        color: #333;
+    }
+
+    @media (max-width: 768px) {
+        .jobs-table {
+            font-size: 14px;
+        }
+
+        .jobs-table th,
+        .jobs-table td {
+            padding: 10px;
+        }
+
+        .dashboard-header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 15px;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="dashboard-header">
+        <div>
+            <h1>My Dashboard</h1>
+            <p style="color: #777;">Welcome back! Here are your recent jobs.</p>
+        </div>
+        <a href="{{ url_for('index') }}" class="btn">+ New Upload</a>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="label">Total Jobs</div>
+            <div class="value">{{ jobs|length }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Completed</div>
+            <div class="value">{{ jobs|selectattr('status', 'equalto', 'completed')|list|length }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Processing</div>
+            <div class="value">{{ jobs|selectattr('status', 'in', ['queued', 'running'])|list|length }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Failed</div>
+            <div class="value">{{ jobs|selectattr('status', 'equalto', 'error')|list|length }}</div>
+        </div>
+    </div>
+
+    {% if jobs %}
+    <div style="overflow-x: auto;">
+        <table class="jobs-table">
+            <thead>
+                <tr>
+                    <th>File Name</th>
+                    <th>Status</th>
+                    <th>Progress</th>
+                    <th>Created</th>
+                    <th>Duration</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for job in jobs %}
+                <tr>
+                    <td>
+                        <strong>{{ job.original_filename }}</strong>
+                    </td>
+                    <td>
+                        <span class="status-badge-small status-{{ job.status }}">
+                            {{ job.status.upper() }}
+                        </span>
+                    </td>
+                    <td>
+                        {% if job.status == 'running' %}
+                            {{ job.progress_percent or 0 }}%
+                            {% if job.total_chunks %}
+                                ({{ job.current_chunk or 0 }}/{{ job.total_chunks }})
+                            {% endif %}
+                        {% elif job.status == 'completed' %}
+                            ✅ Complete
+                        {% elif job.status == 'error' %}
+                            ❌ Failed
+                        {% else %}
+                            ⏳ Queued
+                        {% endif %}
+                    </td>
+                    <td style="font-size: 13px; color: #777;">
+                        {{ job.created_at.strftime('%Y-%m-%d %H:%M') if job.created_at else 'N/A' }}
+                    </td>
+                    <td>
+                        {% if job.duration_seconds %}
+                            {{ "%.1f"|format(job.duration_seconds / 60) }} min
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="job-actions">
+                            <a href="{{ url_for('job_status_page', job_id=job.id) }}">View</a>
+                            {% if job.status == 'completed' %}
+                                {% if job.conversation_path %}
+                                    <a href="{{ url_for('download_file', job_id=job.id, file_type='conversation') }}">Transcript</a>
+                                {% endif %}
+                                {% if job.minutes_path %}
+                                    <a href="{{ url_for('download_file', job_id=job.id, file_type='minutes') }}">Minutes</a>
+                                {% endif %}
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-state-icon">📭</div>
+        <h3>No jobs yet</h3>
+        <p style="margin: 15px 0;">Upload your first meeting audio to get started!</p>
+        <a href="{{ url_for('index') }}" class="btn">Upload Audio File</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
