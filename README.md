@@ -63,12 +63,6 @@ pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 
 # Install all other dependencies
 pip install -r requirements.txt
-
-# Fix NumPy compatibility (required for PyTorch 2.1)
-pip install "numpy<2"
-
-# Install matplotlib (required by pyannote)
-pip install matplotlib
 ```
 
 **Note:** Installing dependencies may take 10-20 minutes due to large ML libraries.
@@ -154,21 +148,25 @@ MP3, WAV, M4A, OGG, FLAC, AAC, WMA - up to 1GB, up to 24 hours duration
 
 ```
 Transcription_Website/
-├── app.py              # Main Flask application
-├── requirements.txt    # Python dependencies
-├── .env.example        # Environment template
-├── .env                # Your configuration (create from .env.example)
-├── templates/          # HTML templates
-│   ├── base.html       # Base template with styling
-│   ├── index.html      # Upload page
-│   ├── job_status.html # Progress tracking page
-│   ├── login.html      # Login page
-│   ├── register.html   # Registration page
-│   └── dashboard.html  # User dashboard
-├── uploads/            # Uploaded audio files (auto-created)
-├── outputs/            # Generated transcripts and minutes (auto-created)
-├── chunks/             # Temporary audio chunks (auto-created)
-└── instance/           # SQLite database (auto-created)
+├── app.py                    # Main Flask application
+├── requirements.txt          # Python dependencies
+├── .env.example              # Environment template
+├── deploy.sh                 # One-command server deployment script
+├── Dockerfile                # Docker image definition
+├── docker-compose.yml        # Docker compose configuration
+├── nginx.conf                # Nginx reverse proxy config
+├── meeting-minutes.service   # Systemd service file
+├── templates/                # HTML templates
+│   ├── base.html
+│   ├── index.html
+│   ├── job_status.html
+│   ├── login.html
+│   ├── register.html
+│   └── dashboard.html
+├── uploads/                  # Uploaded audio files (auto-created)
+├── outputs/                  # Generated transcripts/minutes (auto-created)
+├── chunks/                   # Temporary audio chunks (auto-created)
+└── instance/                 # SQLite database (auto-created)
 ```
 
 ## Troubleshooting
@@ -232,9 +230,30 @@ Make sure you:
    - https://huggingface.co/pyannote/speaker-diarization-3.0
    - https://huggingface.co/pyannote/segmentation-3.0
 
-## Production Deployment
+## Server Deployment
 
-For production deployment:
+### Quick Deploy (Recommended)
+
+Run this single command on your server:
+```bash
+curl -sSL https://raw.githubusercontent.com/UNLVCS/Transcription_Website/main/deploy.sh | bash
+```
+
+Or manually:
+```bash
+git clone https://github.com/UNLVCS/Transcription_Website.git
+cd Transcription_Website
+bash deploy.sh
+```
+
+The script automatically:
+- Checks system requirements
+- Installs dependencies
+- Configures environment
+- Sets up systemd service
+
+### Manual Production Setup
+
 1. Use PostgreSQL instead of SQLite (update `DATABASE_URL` in `.env`)
 2. Run with Gunicorn: `gunicorn --workers 4 --timeout 7200 --bind 0.0.0.0:5000 app:app`
 3. Use Nginx as reverse proxy (see `nginx.conf`)
