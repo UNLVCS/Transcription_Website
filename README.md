@@ -234,7 +234,11 @@ Make sure you:
 
 ## Production Deployment
 
-For production deployment with PostgreSQL, Gunicorn, and Nginx, see the [Production Deployment Guide](DEPLOYMENT_CHECKLIST.md).
+For production deployment:
+1. Use PostgreSQL instead of SQLite (update `DATABASE_URL` in `.env`)
+2. Run with Gunicorn: `gunicorn --workers 4 --timeout 7200 --bind 0.0.0.0:5000 app:app`
+3. Use Nginx as reverse proxy (see `nginx.conf`)
+4. Set up as systemd service (see `meeting-minutes.service`)
 
 ## Technology Stack
 
