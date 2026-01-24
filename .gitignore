@@ -19,6 +19,7 @@ build/
 *.db
 *.sqlite
 *.sqlite3
+instance/
 
 # Application data
 uploads/

@@ -31,19 +31,45 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from sqlalchemy import text
 
-import torch
-import whisperx
-from pydub import AudioSegment
-from pyannote.audio import Pipeline
-from langdetect import detect, DetectorFactory
-import google.generativeai as genai
+# ML libraries are imported lazily to speed up startup
+torch = None
+whisperx = None
+Pipeline = None
+detect = None
+DetectorFactory = None
+genai = None
+AudioSegment = None
+
+def load_ml_libraries():
+    """Lazy load ML libraries when needed for processing."""
+    global torch, whisperx, Pipeline, detect, DetectorFactory, genai, AudioSegment, DEVICE_STR, DEVICE
+    if torch is None:
+        import torch as _torch
+        torch = _torch
+        DEVICE_STR = "cuda" if torch.cuda.is_available() else "cpu"
+        DEVICE = torch.device(DEVICE_STR)
+    if whisperx is None:
+        import whisperx as _whisperx
+        whisperx = _whisperx
+    if Pipeline is None:
+        from pyannote.audio import Pipeline as _Pipeline
+        Pipeline = _Pipeline
+    if detect is None:
+        from langdetect import detect as _detect, DetectorFactory as _DetectorFactory
+        detect = _detect
+        DetectorFactory = _DetectorFactory
+        DetectorFactory.seed = 0
+    if genai is None:
+        import google.generativeai as _genai
+        genai = _genai
+    if AudioSegment is None:
+        from pydub import AudioSegment as _AudioSegment
+        AudioSegment = _AudioSegment
 
 # ---------- GLOBAL CONFIG ---------- #
 
-DetectorFactory.seed = 0  # deterministic language detection
-
-DEVICE_STR = "cuda" if torch.cuda.is_available() else "cpu"
-DEVICE = torch.device(DEVICE_STR)
+DEVICE_STR = "cpu"  # Will be updated when ML libraries are loaded
+DEVICE = None
 
 BASE_DIR = Path(__file__).parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -61,10 +87,10 @@ CHUNK_LENGTH_MS = 60 * 1000  # 1 minute chunks
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "replace-with-a-secure-random-key-in-production")
 
-# Database configuration
+# Database configuration - use SQLite for local development
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql://postgres:password@localhost:5432/meeting_minutes"
+    "sqlite:///meeting_minutes.db"
 )
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
@@ -160,6 +186,7 @@ def convert_to_wav(input_path: str, target_sample_rate: int = 16000) -> tuple:
     """
     Convert any audio file to mono WAV and return path + duration in seconds.
     """
+    load_ml_libraries()
     audio = AudioSegment.from_file(input_path)
     duration_seconds = len(audio) / 1000.0
     
@@ -173,6 +200,7 @@ def convert_to_wav(input_path: str, target_sample_rate: int = 16000) -> tuple:
 
 def split_audio(audio_path, chunk_length_ms=60 * 1000):
     """Split audio into chunks and return list of chunk paths."""
+    load_ml_libraries()
     audio = AudioSegment.from_wav(audio_path)
     chunks = []
 
@@ -195,6 +223,7 @@ def load_models(hf_token: str):
     """
     Load WhisperX and pyannote diarization models with user's HF token.
     """
+    load_ml_libraries()
     whisper_model = whisperx.load_model("large-v2", device=DEVICE_STR)
 
     diarization_pipeline = Pipeline.from_pretrained(
@@ -212,6 +241,7 @@ def load_models(hf_token: str):
 
 def process_chunk(chunk_path, whisper_model, diarization_pipeline):
     """Process a single audio chunk: transcribe, align, and diarize."""
+    load_ml_libraries()
     print(f"Transcribing {chunk_path}...")
 
     if torch.cuda.is_available():
@@ -305,6 +335,7 @@ def process_chunk(chunk_path, whisper_model, diarization_pipeline):
 
 def detect_language_safe(text):
     """Safely detect language, defaulting to English."""
+    load_ml_libraries()
     try:
         detected_lang = detect(text)
         if detected_lang not in ["en", "es"]:
@@ -348,6 +379,7 @@ def generate_minutes_from_gemini(transcript_text: str, gemini_api_key: str) -> s
     """
     Generate meeting minutes using Google Gemini API.
     """
+    load_ml_libraries()
     try:
         genai.configure(api_key=gemini_api_key)
         model = genai.GenerativeModel('gemini-pro')
@@ -430,12 +462,13 @@ def update_job_progress(job_id: str, **kwargs):
 
 # ---------- MAIN PIPELINE ---------- #
 
-def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str, 
+def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
                  hf_token: str, gemini_api_key: str):
     """
     Complete pipeline: convert, transcribe, diarize, generate minutes.
     Updates progress in real-time.
     """
+    load_ml_libraries()  # Load ML libraries when processing starts
     try:
         update_job_progress(
             job_id,
