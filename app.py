@@ -449,15 +449,16 @@ Please format the minutes professionally with clear headings, bullet points wher
 
 def update_job_progress(job_id: str, **kwargs):
     """Update job progress in database."""
-    try:
-        job = Job.query.get(job_id)
-        if job:
-            for key, value in kwargs.items():
-                setattr(job, key, value)
-            db.session.commit()
-    except Exception as e:
-        print(f"Error updating job progress: {e}")
-        db.session.rollback()
+    with app.app_context():
+        try:
+            job = Job.query.get(job_id)
+            if job:
+                for key, value in kwargs.items():
+                    setattr(job, key, value)
+                db.session.commit()
+        except Exception as e:
+            print(f"Error updating job progress: {e}")
+            db.session.rollback()
 
 
 # ---------- MAIN PIPELINE ---------- #
@@ -468,8 +469,13 @@ def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
     Complete pipeline: convert, transcribe, diarize, generate minutes.
     Updates progress in real-time.
     """
-    load_ml_libraries()  # Load ML libraries when processing starts
+    import sys
+    print(f"Starting pipeline for job {job_id}...", flush=True)
+    sys.stdout.flush()
     try:
+        print("Loading ML libraries...", flush=True)
+        load_ml_libraries()  # Load ML libraries when processing starts
+        print("ML libraries loaded successfully", flush=True)
         update_job_progress(
             job_id,
             status="running",
@@ -585,7 +591,9 @@ def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
         )
 
     except Exception as e:
-        print(f"Job {job_id} failed: {e}")
+        import traceback
+        print(f"Job {job_id} failed: {e}", flush=True)
+        traceback.print_exc()
         update_job_progress(
             job_id,
             status="error",
@@ -593,6 +601,17 @@ def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
             finished_at=datetime.utcnow(),
             current_stage=f"Error: {str(e)}"
         )
+
+
+def run_pipeline_wrapper(audio_path_original: str, output_prefix: str, job_id: str,
+                         hf_token: str, gemini_api_key: str):
+    """Wrapper to catch any exceptions in the pipeline thread."""
+    import traceback
+    try:
+        run_pipeline(audio_path_original, output_prefix, job_id, hf_token, gemini_api_key)
+    except Exception as e:
+        print(f"CRITICAL: Pipeline wrapper caught exception: {e}", flush=True)
+        traceback.print_exc()
 
 
 # ---------- CLEANUP TASK ---------- #
@@ -739,11 +758,12 @@ def upload():
     # Start background processing
     output_prefix = f"job_{job_id}"
     t = Thread(
-        target=run_pipeline,
+        target=run_pipeline_wrapper,
         args=(str(upload_path), output_prefix, job_id, hf_token, gemini_key),
         daemon=True
     )
     t.start()
+    print(f"Background thread started for job {job_id}", flush=True)
     
     return jsonify({"job_id": job_id})
 
