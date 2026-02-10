@@ -382,7 +382,7 @@ def generate_minutes_from_gemini(transcript_text: str, gemini_api_key: str) -> s
     load_ml_libraries()
     try:
         genai.configure(api_key=gemini_api_key)
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         prompt = f"""You are an expert assistant that creates professional, comprehensive meeting minutes from conversation transcripts.
 
@@ -845,3 +845,4 @@ if __name__ == "__main__":
     
     # Run Flask app
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+
