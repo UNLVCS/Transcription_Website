@@ -224,7 +224,7 @@ def load_models(hf_token: str):
     Load WhisperX and pyannote diarization models with user's HF token.
     """
     load_ml_libraries()
-    whisper_model = whisperx.load_model("large-v2", device=DEVICE_STR)
+    whisper_model = whisperx.load_model("large-v2", device=DEVICE_STR, compute_type="float16")
 
     diarization_pipeline = Pipeline.from_pretrained(
         "pyannote/speaker-diarization-3.0",
