@@ -113,6 +113,15 @@
         font-weight: bold;
         color: #333;
     }
+
+    .progress-bar.pulsing {
+        animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
 </style>
 {% endblock %}
 
@@ -309,6 +318,13 @@
                 progressText.textContent = pct + '%';
                 submitBtn.textContent = '⏳ Uploading... ' + pct + '%';
             }
+        };
+
+        xhr.upload.onload = function() {
+            // Upload finished, server is now saving the file and creating the job
+            submitBtn.textContent = '⚙️ Saving file on server... please wait';
+            progressText.textContent = 'Processing...';
+            progressBar.classList.add('pulsing');
         };
 
         xhr.onload = function() {
