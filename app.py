@@ -94,7 +94,7 @@ DATABASE_URL = os.environ.get(
 )
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024  # 1GB max file size
+app.config["MAX_CONTENT_LENGTH"] = 3 * 1024 * 1024 * 1024  # 3GB max file size
 
 db = SQLAlchemy(app)
 login_manager = LoginManager()

@@ -3,13 +3,13 @@ Description=Meeting Minutes Generator
 After=network.target postgresql.service
 
 [Service]
-Type=notify
-User=YOUR_USERNAME
-Group=www-data
-WorkingDirectory=/var/www/meeting_minutes
-Environment="PATH=/var/www/meeting_minutes/venv/bin"
+Type=simple
+User=fonseca
+Group=fonseca
+WorkingDirectory=/home/fonseca/Transcription_Website
+Environment="PATH=/home/fonseca/Transcription_Website/venv/bin"
 Environment="FLASK_ENV=production"
-ExecStart=/var/www/meeting_minutes/venv/bin/gunicorn --workers 4 --threads 2 --timeout 7200 --bind 0.0.0.0:5000 app:app
+ExecStart=/home/fonseca/Transcription_Website/venv/bin/gunicorn --workers 4 --threads 2 --timeout 7200 --bind 0.0.0.0:5001 app:app
 Restart=always
 RestartSec=10
 
