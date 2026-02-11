@@ -84,6 +84,7 @@ CHUNKS_DIR.mkdir(exist_ok=True)
 CHUNK_LENGTH_MS = 60 * 1000  # 1 minute chunks
 
 job_queue = queue.Queue()
+cancelled_jobs = set()
 AVG_JOB_DURATION_MINUTES = 15
 
 # ---------- FLASK APP SETUP ---------- #
@@ -477,6 +478,17 @@ def update_job_progress(job_id: str, **kwargs):
 
 # ---------- MAIN PIPELINE ---------- #
 
+class JobCancelled(Exception):
+    """Raised when a job is cancelled by the user."""
+    pass
+
+
+def check_cancelled(job_id):
+    """Raise JobCancelled if this job has been cancelled."""
+    if job_id in cancelled_jobs:
+        raise JobCancelled(f"Job {job_id} was cancelled by user")
+
+
 def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
                  hf_token: str, gemini_api_key: str):
     """
@@ -487,6 +499,7 @@ def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
     print(f"Starting pipeline for job {job_id}...", flush=True)
     sys.stdout.flush()
     try:
+        check_cancelled(job_id)
         print("Loading ML libraries...", flush=True)
         load_ml_libraries()  # Load ML libraries when processing starts
         print("ML libraries loaded successfully", flush=True)
@@ -499,6 +512,7 @@ def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
         )
 
         # Convert to WAV
+        check_cancelled(job_id)
         wav_path, duration = convert_to_wav(audio_path_original)
         update_job_progress(
             job_id,
@@ -508,6 +522,7 @@ def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
         )
 
         # Load models
+        check_cancelled(job_id)
         whisper_model, diarization_pipeline = load_models(hf_token)
         update_job_progress(
             job_id,
@@ -529,6 +544,7 @@ def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
         start_time = time.time()
 
         for i, chunk in enumerate(chunks):
+            check_cancelled(job_id)
             chunk_start = time.time()
             
             update_job_progress(
@@ -566,6 +582,7 @@ def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
         conversation_path = None
         minutes_path = None
 
+        check_cancelled(job_id)
         if all_segments:
             update_job_progress(
                 job_id,
@@ -585,6 +602,7 @@ def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
                 conversation_path=str(conversation_path)
             )
 
+            check_cancelled(job_id)
             minutes_text = generate_minutes_from_gemini(conversation_transcript, gemini_api_key)
             minutes_path = OUTPUT_DIR / f"{output_prefix}_minutes.txt"
             with open(minutes_path, "w", encoding="utf-8") as f:
@@ -604,6 +622,9 @@ def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
             estimated_time_remaining=0
         )
 
+    except JobCancelled:
+        print(f"Job {job_id} was cancelled by user.", flush=True)
+        cancelled_jobs.discard(job_id)
     except Exception as e:
         import traceback
         print(f"Job {job_id} failed: {e}", flush=True)
@@ -635,6 +656,11 @@ def queue_worker():
         if job_args is None:
             continue
         job_id = job_args['job_id']
+        if job_id in cancelled_jobs:
+            print(f"[Queue Worker] Skipping cancelled job {job_id}", flush=True)
+            cancelled_jobs.discard(job_id)
+            job_queue.task_done()
+            continue
         print(f"[Queue Worker] Starting job {job_id}", flush=True)
         run_pipeline_wrapper(
             job_args['audio_path'], job_args['output_prefix'],
@@ -900,6 +926,11 @@ def delete_job(job_id):
 
     if job.user_id != current_user.id:
         return jsonify({"error": "Access denied"}), 403
+
+    # Cancel if running or queued
+    if job.status in ("running", "queued"):
+        cancelled_jobs.add(job_id)
+        print(f"Job {job_id} cancelled (was {job.status})", flush=True)
 
     # Delete associated files
     for path in [job.upload_path, job.conversation_path, job.minutes_path]:
