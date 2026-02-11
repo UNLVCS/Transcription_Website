@@ -3,6 +3,7 @@ import gc
 import uuid
 import time
 import json
+import queue
 from pathlib import Path
 from threading import Thread
 from datetime import datetime, timedelta
@@ -82,6 +83,9 @@ CHUNKS_DIR.mkdir(exist_ok=True)
 
 CHUNK_LENGTH_MS = 60 * 1000  # 1 minute chunks
 
+job_queue = queue.Queue()
+AVG_JOB_DURATION_MINUTES = 15
+
 # ---------- FLASK APP SETUP ---------- #
 
 app = Flask(__name__)
@@ -153,6 +157,15 @@ class Job(db.Model):
     # Audio info
     duration_seconds = db.Column(db.Float)
 
+    def _get_queue_position(self):
+        """Return 1-based position among queued jobs, or 0 if not queued."""
+        if self.status != "queued":
+            return 0
+        return Job.query.filter(
+            Job.status == "queued",
+            Job.created_at <= self.created_at,
+        ).count()
+
     def to_dict(self):
         return {
             "id": self.id,
@@ -168,6 +181,7 @@ class Job(db.Model):
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "error": self.error,
             "duration_seconds": self.duration_seconds,
+            "queue_position": self._get_queue_position(),
             "outputs": {
                 "conversation": Path(self.conversation_path).name if self.conversation_path else None,
                 "minutes": Path(self.minutes_path).name if self.minutes_path else None,
@@ -614,6 +628,22 @@ def run_pipeline_wrapper(audio_path_original: str, output_prefix: str, job_id: s
         traceback.print_exc()
 
 
+def queue_worker():
+    """Process jobs one at a time from the queue."""
+    while True:
+        job_args = job_queue.get()
+        if job_args is None:
+            continue
+        job_id = job_args['job_id']
+        print(f"[Queue Worker] Starting job {job_id}", flush=True)
+        run_pipeline_wrapper(
+            job_args['audio_path'], job_args['output_prefix'],
+            job_id, job_args['hf_token'], job_args['gemini_api_key'],
+        )
+        print(f"[Queue Worker] Finished job {job_id}", flush=True)
+        job_queue.task_done()
+
+
 # ---------- CLEANUP TASK ---------- #
 
 def cleanup_old_files():
@@ -755,15 +785,16 @@ def upload():
     db.session.add(job)
     db.session.commit()
     
-    # Start background processing
+    # Enqueue for sequential processing
     output_prefix = f"job_{job_id}"
-    t = Thread(
-        target=run_pipeline_wrapper,
-        args=(str(upload_path), output_prefix, job_id, hf_token, gemini_key),
-        daemon=True
-    )
-    t.start()
-    print(f"Background thread started for job {job_id}", flush=True)
+    job_queue.put({
+        'job_id': job_id,
+        'audio_path': str(upload_path),
+        'output_prefix': output_prefix,
+        'hf_token': hf_token,
+        'gemini_api_key': gemini_key,
+    })
+    print(f"Job {job_id} added to queue (queue size: {job_queue.qsize()})", flush=True)
     
     return jsonify({"job_id": job_id})
 
@@ -794,6 +825,42 @@ def job_status_api(job_id):
     return jsonify(job.to_dict())
 
 
+@app.route("/api/queue-status")
+def queue_status_api():
+    """API endpoint for global queue status."""
+    queued_jobs = Job.query.filter_by(status="queued").order_by(Job.created_at).all()
+    running_job = Job.query.filter_by(status="running").first()
+
+    is_processing = running_job is not None
+    queue_length = len(queued_jobs)
+
+    # Estimate wait: remaining time on running job + queued jobs * avg duration
+    estimated_wait_minutes = queue_length * AVG_JOB_DURATION_MINUTES
+    running_job_info = None
+    if running_job:
+        running_job_info = {
+            "id": running_job.id,
+            "original_filename": running_job.original_filename,
+            "progress_percent": running_job.progress_percent or 0,
+        }
+        # Add remaining time for running job
+        remaining_fraction = 1 - (running_job.progress_percent or 0) / 100
+        estimated_wait_minutes += remaining_fraction * AVG_JOB_DURATION_MINUTES
+
+    estimated_wait_minutes = round(estimated_wait_minutes)
+
+    return jsonify({
+        "queue_length": queue_length,
+        "is_processing": is_processing,
+        "running_job": running_job_info,
+        "estimated_wait_minutes": estimated_wait_minutes,
+        "queued_jobs": [
+            {"id": j.id, "original_filename": j.original_filename}
+            for j in queued_jobs
+        ],
+    })
+
+
 @app.route("/download/<job_id>/<file_type>")
 def download_file(job_id, file_type):
     """Download conversation or minutes file."""
@@ -821,6 +888,52 @@ def download_file(job_id, file_type):
     return "File not found", 404
 
 
+@app.route("/api/delete/<job_id>", methods=["DELETE"])
+@login_required
+def delete_job(job_id):
+    """Delete a job and all its associated files."""
+    import shutil
+
+    job = Job.query.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    if job.user_id != current_user.id:
+        return jsonify({"error": "Access denied"}), 403
+
+    # Delete associated files
+    for path in [job.upload_path, job.conversation_path, job.minutes_path]:
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception as e:
+                print(f"Error deleting {path}: {e}")
+
+    # Delete chunk directory
+    if job.upload_path:
+        chunk_dir = CHUNKS_DIR / Path(job.upload_path).stem
+        if chunk_dir.exists():
+            try:
+                shutil.rmtree(chunk_dir)
+            except Exception as e:
+                print(f"Error deleting chunk dir {chunk_dir}: {e}")
+
+    # Also try the converted WAV in outputs
+    if job.upload_path:
+        converted_wav = OUTPUT_DIR / (Path(job.upload_path).stem + "_converted.wav")
+        if converted_wav.exists():
+            try:
+                os.remove(converted_wav)
+            except Exception as e:
+                print(f"Error deleting {converted_wav}: {e}")
+
+    # Delete from database
+    db.session.delete(job)
+    db.session.commit()
+
+    return jsonify({"status": "deleted"})
+
+
 @app.route("/api/cleanup")
 def trigger_cleanup():
     """Manual cleanup trigger (should be called by cron job)."""
@@ -839,10 +952,27 @@ def init_db():
 
 # ---------- MAIN ---------- #
 
+def start_queue_worker():
+    """Start worker thread and handle orphaned jobs from previous crashes."""
+    with app.app_context():
+        # Mark stuck "running" jobs as error
+        for job in Job.query.filter_by(status="running").all():
+            job.status = "error"
+            job.error = "Server restarted while job was processing. Please re-upload."
+            job.finished_at = datetime.utcnow()
+        # Mark orphaned "queued" jobs as error (we lost their API keys)
+        for job in Job.query.filter_by(status="queued").all():
+            job.status = "error"
+            job.error = "Server restarted while job was queued. Please re-upload."
+            job.finished_at = datetime.utcnow()
+        db.session.commit()
+
+    worker = Thread(target=queue_worker, daemon=True, name="job-queue-worker")
+    worker.start()
+
+init_db()
+start_queue_worker()
+
 if __name__ == "__main__":
-    # Initialize database
-    init_db()
-    
-    # Run Flask app
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
 

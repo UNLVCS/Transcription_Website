@@ -188,6 +188,13 @@
         {{ job.status.upper() }}
     </div>
 
+    <div id="queue-info-panel" style="display: {% if job.status == 'queued' %}block{% else %}none{% endif %}; background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+        <h3 style="color: #856404; margin-bottom: 10px;">Waiting in Queue</h3>
+        <p style="color: #856404; font-size: 16px;">Your job is <strong>#<span id="queue-position">?</span></strong> in queue</p>
+        <p style="color: #856404; font-size: 16px;">Estimated wait: <strong>~<span id="queue-wait">?</span> minutes</strong></p>
+        <p style="color: #856404; margin-top: 10px; font-size: 14px;">You can close this page and come back later — your place in line is saved.</p>
+    </div>
+
     <div class="info-grid">
         <div class="info-item">
             <div class="label">File Name</div>
@@ -426,11 +433,44 @@
         }
     }
 
+    async function updateQueueInfo() {
+        try {
+            const response = await fetch('/api/queue-status');
+            const data = await response.json();
+            const panel = document.getElementById('queue-info-panel');
+
+            // Find this job's position
+            const queuedIds = data.queued_jobs.map(j => j.id);
+            const idx = queuedIds.indexOf(jobId);
+
+            if (idx >= 0) {
+                // Job is queued — compute wait
+                const positionInQueue = idx + 1;
+                let waitMinutes = positionInQueue * 15;
+                if (data.is_processing && data.running_job) {
+                    const remaining = 1 - (data.running_job.progress_percent || 0) / 100;
+                    waitMinutes += Math.round(remaining * 15);
+                }
+                document.getElementById('queue-position').textContent = positionInQueue;
+                document.getElementById('queue-wait').textContent = Math.round(waitMinutes);
+                panel.style.display = 'block';
+            } else {
+                panel.style.display = 'none';
+            }
+        } catch (err) {
+            console.error('Error fetching queue status:', err);
+        }
+    }
+
     // Initial update
     updateJobStatus();
+    updateQueueInfo();
 
     // Poll for updates every 3 seconds
-    updateInterval = setInterval(updateJobStatus, 3000);
+    updateInterval = setInterval(() => {
+        updateJobStatus();
+        updateQueueInfo();
+    }, 3000);
 
     // Update elapsed time every second
     setInterval(() => {

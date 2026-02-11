@@ -126,6 +126,9 @@
 {% endblock %}
 
 {% block content %}
+<div id="queue-banner" style="padding: 15px 20px; border-radius: 8px; margin-bottom: 20px; display: none;">
+</div>
+
 <div class="card">
     <h1>Upload Meeting Audio</h1>
     
@@ -202,6 +205,40 @@
 
 {% block extra_js %}
 <script>
+    // Queue status banner
+    async function updateQueueBanner() {
+        try {
+            const res = await fetch('/api/queue-status');
+            const data = await res.json();
+            const banner = document.getElementById('queue-banner');
+
+            if (!data.is_processing && data.queue_length === 0) {
+                banner.style.display = 'block';
+                banner.style.background = '#d1e7dd';
+                banner.style.border = '1px solid #0f5132';
+                banner.style.color = '#0f5132';
+                banner.innerHTML = '<strong>Server is available</strong> — your job will start immediately.';
+            } else {
+                banner.style.display = 'block';
+                banner.style.background = '#fff3cd';
+                banner.style.border = '1px solid #ffc107';
+                banner.style.color = '#856404';
+                let msg = '<strong>Server is processing a job.</strong>';
+                if (data.queue_length > 0) {
+                    msg += ` ${data.queue_length} job${data.queue_length > 1 ? 's' : ''} in queue.`;
+                }
+                if (data.estimated_wait_minutes > 0) {
+                    msg += ` Estimated wait: ~${data.estimated_wait_minutes} min.`;
+                }
+                banner.innerHTML = msg;
+            }
+        } catch (e) {
+            console.error('Error fetching queue status:', e);
+        }
+    }
+    updateQueueBanner();
+    setInterval(updateQueueBanner, 10000);
+
     // Load saved API keys
     document.addEventListener('DOMContentLoaded', function() {
         const savedHfToken = localStorage.getItem('hf_token');

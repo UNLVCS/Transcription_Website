@@ -77,6 +77,20 @@
         text-decoration: underline;
     }
 
+    .delete-btn {
+        color: #842029;
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 14px;
+        padding: 0;
+        font-family: inherit;
+    }
+
+    .delete-btn:hover {
+        text-decoration: underline;
+    }
+
     .empty-state {
         text-align: center;
         padding: 60px 20px;
@@ -221,6 +235,7 @@
                                     <a href="{{ url_for('download_file', job_id=job.id, file_type='minutes') }}">Minutes</a>
                                 {% endif %}
                             {% endif %}
+                            <button class="delete-btn" onclick="deleteJob('{{ job.id }}', this)">Delete</button>
                         </div>
                     </td>
                 </tr>
@@ -237,4 +252,40 @@
     </div>
     {% endif %}
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    async function deleteJob(jobId, btn) {
+        if (!confirm('Are you sure? This will permanently delete the audio, transcript, minutes, and all associated files.')) {
+            return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Deleting...';
+
+        try {
+            const res = await fetch(`/api/delete/${jobId}`, { method: 'DELETE' });
+            const data = await res.json();
+
+            if (res.ok) {
+                const row = btn.closest('tr');
+                row.remove();
+
+                // If no rows left, reload to show empty state
+                if (!document.querySelector('.jobs-table tbody tr')) {
+                    location.reload();
+                }
+            } else {
+                alert('Error: ' + (data.error || 'Failed to delete'));
+                btn.disabled = false;
+                btn.textContent = 'Delete';
+            }
+        } catch (e) {
+            alert('Error deleting job');
+            btn.disabled = false;
+            btn.textContent = 'Delete';
+        }
+    }
+</script>
 {% endblock %}
