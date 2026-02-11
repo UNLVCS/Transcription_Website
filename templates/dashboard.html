@@ -160,19 +160,19 @@
     <div class="stats-grid">
         <div class="stat-card">
             <div class="label">Total Jobs</div>
-            <div class="value">{{ jobs|length }}</div>
+            <div class="value" id="stat-total">{{ jobs|length }}</div>
         </div>
         <div class="stat-card">
             <div class="label">Completed</div>
-            <div class="value">{{ jobs|selectattr('status', 'equalto', 'completed')|list|length }}</div>
+            <div class="value" id="stat-completed">{{ jobs|selectattr('status', 'equalto', 'completed')|list|length }}</div>
         </div>
         <div class="stat-card">
             <div class="label">Processing</div>
-            <div class="value">{{ jobs|selectattr('status', 'in', ['queued', 'running'])|list|length }}</div>
+            <div class="value" id="stat-processing">{{ jobs|selectattr('status', 'in', ['queued', 'running'])|list|length }}</div>
         </div>
         <div class="stat-card">
             <div class="label">Failed</div>
-            <div class="value">{{ jobs|selectattr('status', 'equalto', 'error')|list|length }}</div>
+            <div class="value" id="stat-failed">{{ jobs|selectattr('status', 'equalto', 'error')|list|length }}</div>
         </div>
     </div>
 
@@ -235,7 +235,7 @@
                                     <a href="{{ url_for('download_file', job_id=job.id, file_type='minutes') }}">Minutes</a>
                                 {% endif %}
                             {% endif %}
-                            <button class="delete-btn" onclick="deleteJob('{{ job.id }}', this)">Delete</button>
+                            <button class="delete-btn" data-status="{{ job.status }}" onclick="deleteJob('{{ job.id }}', this)">Delete</button>
                         </div>
                     </td>
                 </tr>
@@ -269,6 +269,22 @@
             const data = await res.json();
 
             if (res.ok) {
+                // Update stat counters
+                const status = btn.dataset.status;
+                const totalEl = document.getElementById('stat-total');
+                totalEl.textContent = parseInt(totalEl.textContent) - 1;
+
+                if (status === 'completed') {
+                    const el = document.getElementById('stat-completed');
+                    el.textContent = parseInt(el.textContent) - 1;
+                } else if (status === 'queued' || status === 'running') {
+                    const el = document.getElementById('stat-processing');
+                    el.textContent = parseInt(el.textContent) - 1;
+                } else if (status === 'error') {
+                    const el = document.getElementById('stat-failed');
+                    el.textContent = parseInt(el.textContent) - 1;
+                }
+
                 const row = btn.closest('tr');
                 row.remove();
 
