@@ -169,13 +169,74 @@
         footer {
             text-align: center;
             color: white;
-            margin-top: 40px;
-            padding: 20px;
+            margin-top: 50px;
+            padding: 30px 30px 24px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            position: relative;
+            overflow: hidden;
+        }
+
+        footer::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 60px;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.8), transparent);
+            border-radius: 2px;
+        }
+
+        footer .footer-brand {
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+
+        footer .footer-credit {
+            font-size: 13px;
+            opacity: 0.75;
+            margin-top: 8px;
+            transition: opacity 0.3s;
+        }
+
+        footer .footer-credit:hover {
+            opacity: 1;
+        }
+
+        footer .footer-heart {
+            display: inline-block;
+            color: #ff6b9d;
+            animation: heartbeat 1.5s ease-in-out infinite;
+        }
+
+        @keyframes heartbeat {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+
+        footer .footer-divider {
+            width: 40px;
+            height: 1px;
+            background: rgba(255, 255, 255, 0.3);
+            margin: 12px auto;
         }
 
         footer a {
             color: white;
-            text-decoration: underline;
+            text-decoration: none;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.4);
+            transition: border-color 0.3s;
+        }
+
+        footer a:hover {
+            border-bottom-color: white;
         }
     </style>
     {% block extra_css %}{% endblock %}
@@ -215,8 +276,9 @@
         {% block content %}{% endblock %}
 
         <footer>
-            <p>&copy; 2026 Fonseca Research Group</p>
-            <p style="margin-top: 5px; font-size: 14px; opacity: 0.85;">Made with love + AI by Gaurab Subedi</p>
+            <p class="footer-brand">&copy; 2026 Fonseca Research Group</p>
+            <div class="footer-divider"></div>
+            <p class="footer-credit">Made with <span class="footer-heart">&#10084;</span> + AI by Gaurab Subedi</p>
         </footer>
     </div>
 
