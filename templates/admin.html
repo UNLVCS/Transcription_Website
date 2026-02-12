@@ -165,7 +165,7 @@
                     <td style="font-size: 13px; color: #777;">{{ user.created_at.strftime('%Y-%m-%d %H:%M') if user.created_at else 'N/A' }}</td>
                     <td>{{ job_count }}</td>
                     <td>
-                        {% if user.email != config.ADMIN_EMAIL %}
+                        {% if user.email != admin_email %}
                         <button class="delete-btn" onclick="deleteUser({{ user.id }}, this)">Delete</button>
                         {% else %}
                         <span style="color: #777; font-size: 13px;">Admin</span>

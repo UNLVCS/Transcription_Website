@@ -215,7 +215,7 @@ def admin_required(f):
 
 @app.context_processor
 def inject_admin_status():
-    return {"is_admin": is_admin()}
+    return {"is_admin": is_admin(), "admin_email": ADMIN_EMAIL}
 
 
 # ---------- AUDIO PREPROCESSING ---------- #
