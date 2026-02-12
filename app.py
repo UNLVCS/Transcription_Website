@@ -8,6 +8,8 @@ from pathlib import Path
 from threading import Thread
 from datetime import datetime, timedelta
 
+from functools import wraps
+
 from flask import (
     Flask,
     request,
@@ -18,6 +20,7 @@ from flask import (
     flash,
     jsonify,
     session,
+    abort,
 )
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import (
@@ -82,6 +85,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 CHUNKS_DIR.mkdir(exist_ok=True)
 
 CHUNK_LENGTH_MS = 60 * 1000  # 1 minute chunks
+ADMIN_EMAIL = "admin@unlv.edu"
 
 job_queue = queue.Queue()
 cancelled_jobs = set()
@@ -193,6 +197,25 @@ class Job(db.Model):
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
+
+
+def is_admin():
+    return current_user.is_authenticated and current_user.email == ADMIN_EMAIL
+
+
+def admin_required(f):
+    @wraps(f)
+    @login_required
+    def decorated(*args, **kwargs):
+        if not is_admin():
+            abort(403)
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.context_processor
+def inject_admin_status():
+    return {"is_admin": is_admin()}
 
 
 # ---------- AUDIO PREPROCESSING ---------- #
@@ -960,6 +983,125 @@ def delete_job(job_id):
 
     # Delete from database
     db.session.delete(job)
+    db.session.commit()
+
+    return jsonify({"status": "deleted"})
+
+
+# ---------- ADMIN ROUTES ---------- #
+
+@app.route("/admin")
+@admin_required
+def admin_dashboard():
+    """Admin dashboard showing all users and all jobs."""
+    users = db.session.query(
+        User,
+        db.func.count(Job.id).label("job_count")
+    ).outerjoin(Job).group_by(User.id).order_by(User.created_at.desc()).all()
+
+    jobs = Job.query.order_by(Job.created_at.desc()).all()
+
+    total_users = User.query.count()
+    total_jobs = Job.query.count()
+    completed = Job.query.filter_by(status="completed").count()
+    processing = Job.query.filter(Job.status.in_(["queued", "running"])).count()
+    failed = Job.query.filter_by(status="error").count()
+
+    return render_template(
+        "admin.html",
+        users=users,
+        jobs=jobs,
+        total_users=total_users,
+        total_jobs=total_jobs,
+        completed=completed,
+        processing=processing,
+        failed=failed,
+    )
+
+
+@app.route("/api/admin/delete-job/<job_id>", methods=["DELETE"])
+@admin_required
+def admin_delete_job(job_id):
+    """Admin: delete any job and its associated files."""
+    import shutil
+
+    job = Job.query.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    if job.status in ("running", "queued"):
+        cancelled_jobs.add(job_id)
+
+    for path in [job.upload_path, job.conversation_path, job.minutes_path]:
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception as e:
+                print(f"Error deleting {path}: {e}")
+
+    if job.upload_path:
+        chunk_dir = CHUNKS_DIR / Path(job.upload_path).stem
+        if chunk_dir.exists():
+            try:
+                shutil.rmtree(chunk_dir)
+            except Exception as e:
+                print(f"Error deleting chunk dir {chunk_dir}: {e}")
+
+    if job.upload_path:
+        converted_wav = OUTPUT_DIR / (Path(job.upload_path).stem + "_converted.wav")
+        if converted_wav.exists():
+            try:
+                os.remove(converted_wav)
+            except Exception as e:
+                print(f"Error deleting {converted_wav}: {e}")
+
+    db.session.delete(job)
+    db.session.commit()
+
+    return jsonify({"status": "deleted"})
+
+
+@app.route("/api/admin/delete-user/<int:user_id>", methods=["DELETE"])
+@admin_required
+def admin_delete_user(user_id):
+    """Admin: delete a user and all their jobs."""
+    import shutil
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    if user.id == current_user.id:
+        return jsonify({"error": "Cannot delete yourself"}), 400
+
+    for job in user.jobs:
+        if job.status in ("running", "queued"):
+            cancelled_jobs.add(job.id)
+
+        for path in [job.upload_path, job.conversation_path, job.minutes_path]:
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception as e:
+                    print(f"Error deleting {path}: {e}")
+
+        if job.upload_path:
+            chunk_dir = CHUNKS_DIR / Path(job.upload_path).stem
+            if chunk_dir.exists():
+                try:
+                    shutil.rmtree(chunk_dir)
+                except Exception as e:
+                    print(f"Error deleting chunk dir {chunk_dir}: {e}")
+
+        if job.upload_path:
+            converted_wav = OUTPUT_DIR / (Path(job.upload_path).stem + "_converted.wav")
+            if converted_wav.exists():
+                try:
+                    os.remove(converted_wav)
+                except Exception as e:
+                    print(f"Error deleting {converted_wav}: {e}")
+
+    db.session.delete(user)
     db.session.commit()
 
     return jsonify({"status": "deleted"})
