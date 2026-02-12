@@ -856,8 +856,8 @@ def job_status_page(job_id):
         flash("Job not found")
         return redirect(url_for("index"))
     
-    # Check if user owns this job (if logged in)
-    if current_user.is_authenticated and job.user_id != current_user.id:
+    # Check if user owns this job (admins can view any job)
+    if current_user.is_authenticated and job.user_id != current_user.id and not is_admin():
         flash("Access denied")
         return redirect(url_for("dashboard"))
     
@@ -917,8 +917,8 @@ def download_file(job_id, file_type):
     if not job:
         return "Job not found", 404
     
-    # Check access
-    if current_user.is_authenticated and job.user_id and job.user_id != current_user.id:
+    # Check access (admins can download any file)
+    if current_user.is_authenticated and job.user_id and job.user_id != current_user.id and not is_admin():
         return "Access denied", 403
     
     if file_type == "conversation" and job.conversation_path:
