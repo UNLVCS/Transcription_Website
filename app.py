@@ -988,6 +988,106 @@ def delete_job(job_id):
     return jsonify({"status": "deleted"})
 
 
+@app.route("/api/cancel/<job_id>", methods=["POST"])
+@login_required
+def cancel_job(job_id):
+    """Cancel a running or queued job."""
+    job = Job.query.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    if job.user_id != current_user.id and not is_admin():
+        return jsonify({"error": "Access denied"}), 403
+
+    if job.status not in ("running", "queued"):
+        return jsonify({"error": "Job is not running or queued"}), 400
+
+    cancelled_jobs.add(job_id)
+    job.status = "cancelled"
+    job.current_stage = "Cancelled by user"
+    job.finished_at = datetime.utcnow()
+    db.session.commit()
+    print(f"Job {job_id} cancelled by user", flush=True)
+
+    return jsonify({"status": "cancelled"})
+
+
+@app.route("/api/retry/<job_id>", methods=["POST"])
+@login_required
+def retry_job(job_id):
+    """Retry a failed job by re-queuing it with the original file."""
+    job = Job.query.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    if job.user_id != current_user.id and not is_admin():
+        return jsonify({"error": "Access denied"}), 403
+
+    if job.status not in ("error", "cancelled"):
+        return jsonify({"error": "Only failed or cancelled jobs can be retried"}), 400
+
+    if not job.upload_path or not os.path.exists(job.upload_path):
+        return jsonify({"error": "Original upload file no longer exists. Please re-upload."}), 400
+
+    # Get API keys from request
+    hf_token = request.json.get("hf_token") if request.json else None
+    gemini_key = request.json.get("gemini_key") if request.json else None
+
+    if not hf_token or not gemini_key:
+        return jsonify({"error": "API keys are required to retry"}), 400
+
+    # Clean up old output files
+    for path in [job.conversation_path, job.minutes_path]:
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
+    if job.upload_path:
+        chunk_dir = CHUNKS_DIR / Path(job.upload_path).stem
+        if chunk_dir.exists():
+            import shutil
+            try:
+                shutil.rmtree(chunk_dir)
+            except Exception:
+                pass
+
+        converted_wav = OUTPUT_DIR / (Path(job.upload_path).stem + "_converted.wav")
+        if converted_wav.exists():
+            try:
+                os.remove(converted_wav)
+            except Exception:
+                pass
+
+    # Reset job state
+    job.status = "queued"
+    job.current_stage = "Queued for processing (retry)..."
+    job.progress_percent = 0
+    job.current_chunk = 0
+    job.total_chunks = 0
+    job.estimated_time_remaining = None
+    job.error = None
+    job.started_at = None
+    job.finished_at = None
+    job.conversation_path = None
+    job.minutes_path = None
+    db.session.commit()
+
+    # Re-queue
+    output_prefix = f"job_{job_id}"
+    job_queue.put({
+        'job_id': job_id,
+        'audio_path': job.upload_path,
+        'output_prefix': output_prefix,
+        'hf_token': hf_token,
+        'gemini_api_key': gemini_key,
+    })
+    print(f"Job {job_id} retried and re-queued", flush=True)
+
+    return jsonify({"status": "queued"})
+
+
 # ---------- ADMIN ROUTES ---------- #
 
 @app.route("/admin")

@@ -183,7 +183,10 @@
 <body>
     <div class="container">
         <div class="header">
-            <div class="logo">🎙️ Meeting Minutes</div>
+            <div class="logo">
+                <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo" style="height: 40px; vertical-align: middle; margin-right: 10px;" onerror="this.style.display='none'">
+                Meeting Minutes
+            </div>
             <nav class="nav">
                 <a href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}class="active"{% endif %}>Home</a>
                 {% if current_user.is_authenticated %}
@@ -212,7 +215,8 @@
         {% block content %}{% endblock %}
 
         <footer>
-            <p>&copy; 2024 Meeting Minutes Generator | Powered by AI</p>
+            <p>&copy; 2026 Fonseca Research Group</p>
+            <p style="margin-top: 5px; font-size: 14px; opacity: 0.85;">Made with love + AI</p>
         </footer>
     </div>
 

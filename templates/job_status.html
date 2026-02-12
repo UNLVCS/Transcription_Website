@@ -63,6 +63,11 @@
         color: #842029;
     }
 
+    .status-cancelled {
+        background: #e2e3e5;
+        color: #41464b;
+    }
+
     .info-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -258,6 +263,12 @@
         </div>
     </div>
 
+    <div id="cancel-section" style="display: {% if job.status in ('running', 'queued') %}block{% else %}none{% endif %}; margin-top: 20px;">
+        <button class="btn" id="cancel-btn" onclick="cancelJob()" style="background: #dc3545;">
+            Cancel Job
+        </button>
+    </div>
+
     <div id="download-section" style="display: {% if job.status == 'completed' %}block{% else %}none{% endif %};">
         <div class="download-section">
             <h3>✅ Processing Complete!</h3>
@@ -277,14 +288,15 @@
         </div>
     </div>
 
-    <div id="error-section" style="display: {% if job.status == 'error' %}block{% else %}none{% endif %};">
+    <div id="error-section" style="display: {% if job.status in ('error', 'cancelled') %}block{% else %}none{% endif %};">
         <div class="error-section">
-            <h3>❌ Processing Error</h3>
-            <p>An error occurred while processing your file:</p>
-            <pre id="error-text">{{ job.error or 'Unknown error' }}</pre>
-            <p style="margin-top: 15px;">
-                <a href="{{ url_for('index') }}" class="btn">Try Again</a>
-            </p>
+            <h3 id="error-title">{% if job.status == 'cancelled' %}⚠️ Job Cancelled{% else %}❌ Processing Error{% endif %}</h3>
+            <p id="error-desc">{% if job.status == 'cancelled' %}This job was cancelled.{% else %}An error occurred while processing your file:{% endif %}</p>
+            <pre id="error-text" style="{% if job.status == 'cancelled' and not job.error %}display:none{% endif %}">{{ job.error or 'Unknown error' }}</pre>
+            <div style="margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap;">
+                <button class="btn" id="retry-btn" onclick="retryJob()">Retry Job</button>
+                <a href="{{ url_for('index') }}" class="btn btn-secondary">Upload New File</a>
+            </div>
         </div>
     </div>
 
@@ -388,16 +400,18 @@
             const processingSection = document.getElementById('processing-section');
             const downloadSection = document.getElementById('download-section');
             const errorSection = document.getElementById('error-section');
-            
+            const cancelSection = document.getElementById('cancel-section');
+
             processingSection.style.display = data.status === 'running' ? 'block' : 'none';
-            
+            cancelSection.style.display = (data.status === 'running' || data.status === 'queued') ? 'block' : 'none';
+
             if (data.status === 'completed') {
                 downloadSection.style.display = 'block';
-                
+
                 // Update download links
                 const downloadLinks = document.querySelector('.download-links');
                 downloadLinks.innerHTML = '';
-                
+
                 if (data.outputs.conversation) {
                     const transcriptBtn = document.createElement('a');
                     transcriptBtn.href = `/download/${jobId}/conversation`;
@@ -405,7 +419,7 @@
                     transcriptBtn.innerHTML = '📄 Download Transcript';
                     downloadLinks.appendChild(transcriptBtn);
                 }
-                
+
                 if (data.outputs.minutes) {
                     const minutesBtn = document.createElement('a');
                     minutesBtn.href = `/download/${jobId}/minutes`;
@@ -413,15 +427,24 @@
                     minutesBtn.innerHTML = '📋 Download Minutes';
                     downloadLinks.appendChild(minutesBtn);
                 }
-                
+
                 // Stop polling
                 if (updateInterval) {
                     clearInterval(updateInterval);
                 }
-            } else if (data.status === 'error') {
+            } else if (data.status === 'error' || data.status === 'cancelled') {
                 errorSection.style.display = 'block';
-                document.getElementById('error-text').textContent = data.error || 'Unknown error';
-                
+                if (data.status === 'cancelled') {
+                    document.getElementById('error-title').textContent = '⚠️ Job Cancelled';
+                    document.getElementById('error-desc').textContent = 'This job was cancelled.';
+                    document.getElementById('error-text').style.display = 'none';
+                } else {
+                    document.getElementById('error-title').textContent = '❌ Processing Error';
+                    document.getElementById('error-desc').textContent = 'An error occurred while processing your file:';
+                    document.getElementById('error-text').style.display = 'block';
+                    document.getElementById('error-text').textContent = data.error || 'Unknown error';
+                }
+
                 // Stop polling
                 if (updateInterval) {
                     clearInterval(updateInterval);
@@ -480,5 +503,79 @@
             document.getElementById('elapsed-time').textContent = formatTime(elapsed);
         }
     }, 1000);
+
+    async function cancelJob() {
+        if (!confirm('Are you sure you want to cancel this job?')) return;
+
+        const btn = document.getElementById('cancel-btn');
+        btn.disabled = true;
+        btn.textContent = 'Cancelling...';
+
+        try {
+            const res = await fetch(`/api/cancel/${jobId}`, { method: 'POST' });
+            const data = await res.json();
+            if (res.ok) {
+                updateJobStatus();
+            } else {
+                alert('Error: ' + (data.error || 'Failed to cancel'));
+                btn.disabled = false;
+                btn.textContent = 'Cancel Job';
+            }
+        } catch (e) {
+            alert('Error cancelling job');
+            btn.disabled = false;
+            btn.textContent = 'Cancel Job';
+        }
+    }
+
+    async function retryJob() {
+        const hfToken = localStorage.getItem('hf_token') || '';
+        const geminiKey = localStorage.getItem('gemini_key') || '';
+
+        if (!hfToken || !geminiKey) {
+            const inputHf = prompt('Enter your HuggingFace token:');
+            const inputGemini = prompt('Enter your Gemini API key:');
+            if (!inputHf || !inputGemini) {
+                alert('Both API keys are required to retry.');
+                return;
+            }
+            doRetry(inputHf, inputGemini);
+        } else {
+            doRetry(hfToken, geminiKey);
+        }
+    }
+
+    async function doRetry(hfToken, geminiKey) {
+        const btn = document.getElementById('retry-btn');
+        btn.disabled = true;
+        btn.textContent = 'Retrying...';
+
+        try {
+            const res = await fetch(`/api/retry/${jobId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ hf_token: hfToken, gemini_key: geminiKey })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                // Restart polling
+                document.getElementById('error-section').style.display = 'none';
+                updateInterval = setInterval(() => {
+                    updateJobStatus();
+                    updateQueueInfo();
+                }, 3000);
+                updateJobStatus();
+                updateQueueInfo();
+            } else {
+                alert('Error: ' + (data.error || 'Failed to retry'));
+                btn.disabled = false;
+                btn.textContent = 'Retry Job';
+            }
+        } catch (e) {
+            alert('Error retrying job');
+            btn.disabled = false;
+            btn.textContent = 'Retry Job';
+        }
+    }
 </script>
 {% endblock %}
