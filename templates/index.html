@@ -145,7 +145,13 @@
 
     <div class="api-keys-section">
         <h3>🔑 API Keys Required</h3>
-        <p style="margin-bottom: 15px;">To process your audio, you need to provide your own API keys (stored securely in your browser):</p>
+        <p style="margin-bottom: 15px;">To process your audio, you need to provide your own API keys.
+        {% if current_user.is_authenticated %}
+        Your keys are saved to your account so you don't need to enter them again.
+        {% else %}
+        <a href="{{ url_for('login') }}">Log in</a> to save your keys to your account.
+        {% endif %}
+        </p>
         
         <div class="form-group">
             <label for="hf_token">
@@ -239,16 +245,35 @@
     updateQueueBanner();
     setInterval(updateQueueBanner, 10000);
 
-    // Load saved API keys
-    document.addEventListener('DOMContentLoaded', function() {
-        const savedHfToken = localStorage.getItem('hf_token');
-        const savedGeminiKey = localStorage.getItem('gemini_key');
-        
-        if (savedHfToken) {
-            document.getElementById('hf_token').value = savedHfToken;
+    // Load saved API keys (server-side for logged-in users, localStorage as fallback)
+    document.addEventListener('DOMContentLoaded', async function() {
+        {% if current_user.is_authenticated %}
+        try {
+            const res = await fetch('/api/get-keys');
+            if (res.ok) {
+                const data = await res.json();
+                if (data.hf_token) {
+                    document.getElementById('hf_token').value = data.hf_token;
+                }
+                if (data.gemini_key) {
+                    document.getElementById('gemini_key').value = data.gemini_key;
+                }
+            }
+        } catch (e) {
+            console.error('Error loading saved keys:', e);
         }
-        if (savedGeminiKey) {
-            document.getElementById('gemini_key').value = savedGeminiKey;
+        {% endif %}
+
+        // Fallback to localStorage if fields are still empty
+        const hfField = document.getElementById('hf_token');
+        const geminiField = document.getElementById('gemini_key');
+        if (!hfField.value) {
+            const savedHfToken = localStorage.getItem('hf_token');
+            if (savedHfToken) hfField.value = savedHfToken;
+        }
+        if (!geminiField.value) {
+            const savedGeminiKey = localStorage.getItem('gemini_key');
+            if (savedGeminiKey) geminiField.value = savedGeminiKey;
         }
     });
 

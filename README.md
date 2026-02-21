@@ -10,6 +10,7 @@ An AI-powered web application that transcribes meeting audio, identifies speaker
 - **AI-Generated Minutes**: Professional meeting minutes using Google Gemini
 - **Real-time Progress**: Live progress tracking with time estimates
 - **User Accounts**: Optional account system for job history tracking
+- **Server-side API Key Storage**: Logged-in users' API keys are saved to their account and auto-loaded on future sessions
 
 ## Quick Start (Local Development)
 
@@ -126,7 +127,7 @@ You need two API keys to use this application:
 1. Open http://localhost:5000 in your browser
 2. (Optional) Create an account to track your job history
 3. Enter your HuggingFace token and Gemini API key
-4. Check "Save keys in browser" for convenience
+4. If logged in, your API keys are automatically saved to your account and will be pre-filled on future visits — no need to enter them again
 5. Upload an audio file (drag-and-drop or click to select)
 6. Click "Start Processing"
 7. Wait for processing to complete (progress is shown in real-time)

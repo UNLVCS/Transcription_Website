@@ -529,8 +529,20 @@
     }
 
     async function retryJob() {
-        const hfToken = localStorage.getItem('hf_token') || '';
-        const geminiKey = localStorage.getItem('gemini_key') || '';
+        let hfToken = localStorage.getItem('hf_token') || '';
+        let geminiKey = localStorage.getItem('gemini_key') || '';
+
+        // Try loading from server if not in localStorage
+        if (!hfToken || !geminiKey) {
+            try {
+                const res = await fetch('/api/get-keys');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (!hfToken && data.hf_token) hfToken = data.hf_token;
+                    if (!geminiKey && data.gemini_key) geminiKey = data.gemini_key;
+                }
+            } catch (e) { /* ignore */ }
+        }
 
         if (!hfToken || !geminiKey) {
             const inputHf = prompt('Enter your HuggingFace token:');

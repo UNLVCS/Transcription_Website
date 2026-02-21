@@ -119,8 +119,10 @@ class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(255), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
+    hf_token = db.Column(db.String(500), nullable=True)
+    gemini_key = db.Column(db.String(500), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
     jobs = db.relationship("Job", backref="user", lazy=True, cascade="all, delete-orphan")
 
     def set_password(self, password):
@@ -812,10 +814,16 @@ def upload():
     
     hf_token = request.form.get("hf_token")
     gemini_key = request.form.get("gemini_key")
-    
+
     if not hf_token or not gemini_key:
         return jsonify({"error": "HuggingFace token and Gemini API key are required"}), 400
-    
+
+    # Save keys to user account for future sessions
+    if current_user.is_authenticated:
+        current_user.hf_token = hf_token
+        current_user.gemini_key = gemini_key
+        db.session.commit()
+
     # Save uploaded file
     filename = secure_filename(audio_file.filename)
     job_id = uuid.uuid4().hex
@@ -846,6 +854,32 @@ def upload():
     print(f"Job {job_id} added to queue (queue size: {job_queue.qsize()})", flush=True)
     
     return jsonify({"job_id": job_id})
+
+
+@app.route("/api/save-keys", methods=["POST"])
+@login_required
+def save_keys():
+    """Save API keys to the user's account."""
+    data = request.json or {}
+    hf_token = data.get("hf_token", "").strip()
+    gemini_key = data.get("gemini_key", "").strip()
+
+    if hf_token:
+        current_user.hf_token = hf_token
+    if gemini_key:
+        current_user.gemini_key = gemini_key
+    db.session.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/get-keys")
+@login_required
+def get_keys():
+    """Return the user's saved API keys."""
+    return jsonify({
+        "hf_token": current_user.hf_token or "",
+        "gemini_key": current_user.gemini_key or "",
+    })
 
 
 @app.route("/job/<job_id>")
@@ -1029,12 +1063,24 @@ def retry_job(job_id):
     if not job.upload_path or not os.path.exists(job.upload_path):
         return jsonify({"error": "Original upload file no longer exists. Please re-upload."}), 400
 
-    # Get API keys from request
+    # Get API keys from request, fall back to saved keys
     hf_token = request.json.get("hf_token") if request.json else None
     gemini_key = request.json.get("gemini_key") if request.json else None
 
+    if not hf_token and current_user.hf_token:
+        hf_token = current_user.hf_token
+    if not gemini_key and current_user.gemini_key:
+        gemini_key = current_user.gemini_key
+
     if not hf_token or not gemini_key:
         return jsonify({"error": "API keys are required to retry"}), 400
+
+    # Save keys to user account
+    if hf_token:
+        current_user.hf_token = hf_token
+    if gemini_key:
+        current_user.gemini_key = gemini_key
+    db.session.commit()
 
     # Clean up old output files
     for path in [job.conversation_path, job.minutes_path]:
@@ -1220,6 +1266,15 @@ def init_db():
     """Initialize database tables."""
     with app.app_context():
         db.create_all()
+        # Migrate: add hf_token and gemini_key columns to users table if missing
+        with db.engine.connect() as conn:
+            columns = [row[1] for row in conn.execute(text("PRAGMA table_info(users)"))]
+            if "hf_token" not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN hf_token VARCHAR(500)"))
+                conn.commit()
+            if "gemini_key" not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN gemini_key VARCHAR(500)"))
+                conn.commit()
         print("Database tables created successfully")
 
 
