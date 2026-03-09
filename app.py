@@ -1,9 +1,11 @@
 import os
 import gc
+import re
 import uuid
 import time
 import json
 import queue
+import subprocess
 from pathlib import Path
 from threading import Thread
 from datetime import datetime, timedelta
@@ -103,7 +105,7 @@ DATABASE_URL = os.environ.get(
 )
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["MAX_CONTENT_LENGTH"] = 3 * 1024 * 1024 * 1024  # 3GB max file size
+app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024 * 1024  # 100GB max file size
 
 db = SQLAlchemy(app)
 login_manager = LoginManager()
@@ -224,37 +226,91 @@ def inject_admin_status():
 
 def convert_to_wav(input_path: str, target_sample_rate: int = 16000) -> tuple:
     """
-    Convert any audio file to mono WAV and return path + duration in seconds.
+    Convert any audio file to mono WAV using ffmpeg (streams file, no 4GB memory limit).
+    Returns (wav_path, duration_seconds).
     """
-    load_ml_libraries()
-    audio = AudioSegment.from_file(input_path)
-    duration_seconds = len(audio) / 1000.0
-    
-    audio = audio.set_frame_rate(target_sample_rate).set_channels(1)
-    
     wav_path = OUTPUT_DIR / (Path(input_path).stem + "_converted.wav")
-    audio.export(wav_path, format="wav")
-    
+
+    # Get duration via ffprobe
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", input_path],
+            capture_output=True, text=True, timeout=60
+        )
+        duration_seconds = float(probe.stdout.strip()) if probe.stdout.strip() else 0.0
+    except Exception:
+        duration_seconds = 0.0
+
+    # Convert: mono, target sample rate, WAV format
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-i", input_path,
+         "-ar", str(target_sample_rate), "-ac", "1", str(wav_path)],
+        capture_output=True, timeout=7200
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg conversion failed: {result.stderr.decode()[-500:]}")
+
     return str(wav_path), duration_seconds
 
 
 def split_audio(audio_path, chunk_length_ms=60 * 1000):
-    """Split audio into chunks and return list of chunk paths."""
-    load_ml_libraries()
-    audio = AudioSegment.from_wav(audio_path)
-    chunks = []
-
+    """
+    Split audio into chunks using ffmpeg (streams file, handles any size WAV).
+    Returns sorted list of chunk paths.
+    """
+    chunk_length_sec = int(chunk_length_ms / 1000)
     base_name = Path(audio_path).stem
     chunk_dir = CHUNKS_DIR / base_name
     chunk_dir.mkdir(parents=True, exist_ok=True)
 
-    for i in range(0, len(audio), chunk_length_ms):
-        chunk = audio[i:i + chunk_length_ms]
-        chunk_path = chunk_dir / f"chunk_{i // chunk_length_ms}.wav"
-        chunk.export(chunk_path, format="wav")
-        chunks.append(str(chunk_path))
+    chunk_pattern = str(chunk_dir / "chunk_%d.wav")
 
-    return chunks
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-i", audio_path,
+         "-f", "segment", "-segment_time", str(chunk_length_sec),
+         "-c", "copy", chunk_pattern],
+        capture_output=True, timeout=7200
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg split failed: {result.stderr.decode()[-500:]}")
+
+    # Collect and sort chunk files numerically
+    chunks = sorted(chunk_dir.glob("chunk_*.wav"),
+                    key=lambda p: int(p.stem.split("_")[1]))
+    return [str(c) for c in chunks]
+
+
+# ---------- YOUTUBE DOWNLOAD ---------- #
+
+YOUTUBE_URL_RE = re.compile(
+    r'^https?://(www\.)?(youtube\.com/(watch\?.*v=|shorts/)|youtu\.be/)',
+    re.IGNORECASE
+)
+
+
+def is_valid_youtube_url(url: str) -> bool:
+    return bool(YOUTUBE_URL_RE.match(url))
+
+
+def download_youtube_audio(youtube_url: str, job_id: str) -> str:
+    """
+    Download YouTube audio as MP3 using yt-dlp. Returns the local file path.
+    Raises RuntimeError on failure.
+    """
+    output_template = str(UPLOAD_DIR / f"{job_id}_yt.%(ext)s")
+    expected_path = str(UPLOAD_DIR / f"{job_id}_yt.mp3")
+
+    result = subprocess.run(
+        ["yt-dlp", "-x", "--audio-format", "mp3", "--audio-quality", "0",
+         "-o", output_template, youtube_url],
+        capture_output=True, text=True, timeout=3600
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"yt-dlp failed: {result.stderr[-500:]}")
+    if not os.path.exists(expected_path):
+        raise RuntimeError(f"Downloaded file not found: {expected_path}")
+    return expected_path
 
 
 # ---------- MODEL LOADING ---------- #
@@ -515,10 +571,10 @@ def check_cancelled(job_id):
 
 
 def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
-                 hf_token: str, gemini_api_key: str):
+                 hf_token: str, gemini_api_key: str, youtube_url: str = None):
     """
     Complete pipeline: convert, transcribe, diarize, generate minutes.
-    Updates progress in real-time.
+    Updates progress in real-time. Optionally downloads from YouTube first.
     """
     import sys
     print(f"Starting pipeline for job {job_id}...", flush=True)
@@ -528,13 +584,32 @@ def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
         print("Loading ML libraries...", flush=True)
         load_ml_libraries()  # Load ML libraries when processing starts
         print("ML libraries loaded successfully", flush=True)
-        update_job_progress(
-            job_id,
-            status="running",
-            started_at=datetime.utcnow(),
-            current_stage="Converting audio to WAV format...",
-            progress_percent=5
-        )
+
+        # Step 0 (optional): Download YouTube audio
+        if youtube_url:
+            update_job_progress(
+                job_id,
+                status="running",
+                started_at=datetime.utcnow(),
+                current_stage="Downloading YouTube audio...",
+                progress_percent=2
+            )
+            check_cancelled(job_id)
+            audio_path_original = download_youtube_audio(youtube_url, job_id)
+            update_job_progress(job_id, upload_path=audio_path_original)
+            update_job_progress(
+                job_id,
+                current_stage="Converting audio to WAV format...",
+                progress_percent=5
+            )
+        else:
+            update_job_progress(
+                job_id,
+                status="running",
+                started_at=datetime.utcnow(),
+                current_stage="Converting audio to WAV format...",
+                progress_percent=5
+            )
 
         # Convert to WAV
         check_cancelled(job_id)
@@ -664,11 +739,12 @@ def run_pipeline(audio_path_original: str, output_prefix: str, job_id: str,
 
 
 def run_pipeline_wrapper(audio_path_original: str, output_prefix: str, job_id: str,
-                         hf_token: str, gemini_api_key: str):
+                         hf_token: str, gemini_api_key: str, youtube_url: str = None):
     """Wrapper to catch any exceptions in the pipeline thread."""
     import traceback
     try:
-        run_pipeline(audio_path_original, output_prefix, job_id, hf_token, gemini_api_key)
+        run_pipeline(audio_path_original, output_prefix, job_id, hf_token, gemini_api_key,
+                     youtube_url=youtube_url)
     except Exception as e:
         print(f"CRITICAL: Pipeline wrapper caught exception: {e}", flush=True)
         traceback.print_exc()
@@ -688,8 +764,9 @@ def queue_worker():
             continue
         print(f"[Queue Worker] Starting job {job_id}", flush=True)
         run_pipeline_wrapper(
-            job_args['audio_path'], job_args['output_prefix'],
+            job_args.get('audio_path'), job_args['output_prefix'],
             job_id, job_args['hf_token'], job_args['gemini_api_key'],
+            youtube_url=job_args.get('youtube_url'),
         )
         print(f"[Queue Worker] Finished job {job_id}", flush=True)
         job_queue.task_done()
@@ -699,38 +776,58 @@ def queue_worker():
 
 def cleanup_old_files():
     """Delete files older than 30 days."""
+    import shutil
     try:
         cutoff_date = datetime.utcnow() - timedelta(days=30)
         old_jobs = Job.query.filter(Job.created_at < cutoff_date).all()
-        
+
         for job in old_jobs:
-            # Delete files
+            # Delete upload, conversation, and minutes files
             for path in [job.upload_path, job.conversation_path, job.minutes_path]:
                 if path and os.path.exists(path):
                     try:
                         os.remove(path)
                     except Exception as e:
                         print(f"Error deleting {path}: {e}")
-            
+
+            # Delete converted WAV
+            if job.upload_path:
+                converted_wav = OUTPUT_DIR / (Path(job.upload_path).stem + "_converted.wav")
+                if converted_wav.exists():
+                    try:
+                        os.remove(converted_wav)
+                    except Exception as e:
+                        print(f"Error deleting {converted_wav}: {e}")
+
             # Delete chunk directory
             if job.upload_path:
                 chunk_dir = CHUNKS_DIR / Path(job.upload_path).stem
                 if chunk_dir.exists():
                     try:
-                        import shutil
                         shutil.rmtree(chunk_dir)
                     except Exception as e:
                         print(f"Error deleting chunk dir {chunk_dir}: {e}")
-            
-            # Delete job from database
+
             db.session.delete(job)
-        
+
         db.session.commit()
         print(f"Cleaned up {len(old_jobs)} old jobs")
-        
+
     except Exception as e:
         print(f"Error in cleanup: {e}")
         db.session.rollback()
+
+
+def start_cleanup_scheduler():
+    """Run cleanup_old_files() once a day in a background thread."""
+    def _scheduler():
+        while True:
+            time.sleep(24 * 3600)  # Wait 24 hours before first and each subsequent run
+            with app.app_context():
+                print("Running scheduled cleanup...", flush=True)
+                cleanup_old_files()
+    thread = Thread(target=_scheduler, daemon=True, name="cleanup-scheduler")
+    thread.start()
 
 
 # ---------- ROUTES ---------- #
@@ -853,6 +950,54 @@ def upload():
     })
     print(f"Job {job_id} added to queue (queue size: {job_queue.qsize()})", flush=True)
     
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/youtube", methods=["POST"])
+@login_required
+def youtube_submit():
+    """Handle YouTube URL submission (login required)."""
+    data = request.get_json() or {}
+    youtube_url = data.get("youtube_url", "").strip()
+    hf_token = data.get("hf_token", "").strip()
+    gemini_key = data.get("gemini_key", "").strip()
+
+    if not youtube_url:
+        return jsonify({"error": "YouTube URL is required"}), 400
+
+    if not is_valid_youtube_url(youtube_url):
+        return jsonify({"error": "Invalid YouTube URL. Must be a youtube.com or youtu.be link."}), 400
+
+    if not hf_token or not gemini_key:
+        return jsonify({"error": "HuggingFace token and Gemini API key are required"}), 400
+
+    # Save keys to user account
+    current_user.hf_token = hf_token
+    current_user.gemini_key = gemini_key
+    db.session.commit()
+
+    job_id = uuid.uuid4().hex
+    job = Job(
+        id=job_id,
+        user_id=current_user.id,
+        original_filename=youtube_url,
+        status="queued",
+        current_stage="Queued for processing..."
+    )
+    db.session.add(job)
+    db.session.commit()
+
+    output_prefix = f"job_{job_id}"
+    job_queue.put({
+        'job_id': job_id,
+        'audio_path': None,
+        'youtube_url': youtube_url,
+        'output_prefix': output_prefix,
+        'hf_token': hf_token,
+        'gemini_api_key': gemini_key,
+    })
+    print(f"YouTube job {job_id} added to queue (url: {youtube_url})", flush=True)
+
     return jsonify({"job_id": job_id})
 
 
@@ -1300,6 +1445,7 @@ def start_queue_worker():
 
 init_db()
 start_queue_worker()
+start_cleanup_scheduler()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)

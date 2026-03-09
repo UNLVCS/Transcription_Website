@@ -122,6 +122,46 @@
         0%, 100% { opacity: 1; }
         50% { opacity: 0.6; }
     }
+
+    .tab-buttons {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+    }
+
+    .tab-btn {
+        flex: 1;
+        padding: 12px;
+        border: 2px solid #667eea;
+        border-radius: 8px;
+        background: white;
+        color: #667eea;
+        font-size: 15px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .tab-btn.active {
+        background: #667eea;
+        color: white;
+    }
+
+    .tab-btn:hover:not(.active) {
+        background: #f0f0ff;
+    }
+
+    .youtube-input-wrap {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .youtube-input-wrap input {
+        flex: 1;
+        min-width: 200px;
+    }
 </style>
 {% endblock %}
 
@@ -130,12 +170,17 @@
 </div>
 
 <div class="card">
-    <h1>Upload Meeting Audio</h1>
-    
+    <h1>Meeting Minutes Generator</h1>
+
+    <div class="tab-buttons">
+        <button class="tab-btn active" id="tab-btn-file" onclick="switchTab('file')">📁 Upload Audio File</button>
+        <button class="tab-btn" id="tab-btn-youtube" onclick="switchTab('youtube')">▶ YouTube URL</button>
+    </div>
+
     <div class="info-box">
         <h3>🎯 How It Works</h3>
         <ul>
-            <li>Upload any audio file (MP3, WAV, M4A, etc.) - up to 24 hours long</li>
+            <li>Upload an audio file (MP3, WAV, M4A, etc.) <strong>or</strong> paste a YouTube link</li>
             <li>AI automatically transcribes and identifies speakers</li>
             <li>Generates professional meeting minutes with action items</li>
             <li>Processing continues even if you close the page</li>
@@ -177,28 +222,56 @@
         </div>
     </div>
 
-    <form id="upload-form" enctype="multipart/form-data">
-        <div class="upload-area" id="upload-area">
-            <div class="upload-icon">📁</div>
-            <h3>Drop your audio file here or click to browse</h3>
-            <p style="color: #777; margin-top: 10px;">Supports: MP3, WAV, M4A, OGG, FLAC and more</p>
-            <input type="file" id="audio_file" name="audio_file" accept="audio/*" style="display: none;" required />
+    <!-- File upload tab -->
+    <div id="tab-file">
+        <form id="upload-form" enctype="multipart/form-data">
+            <div class="upload-area" id="upload-area">
+                <div class="upload-icon">📁</div>
+                <h3>Drop your audio file here or click to browse</h3>
+                <p style="color: #777; margin-top: 10px;">Supports: MP3, WAV, M4A, OGG, FLAC and more</p>
+                <input type="file" id="audio_file" name="audio_file" accept="audio/*" style="display: none;" required />
+            </div>
+
+            <div class="file-info" id="file-info">
+                <strong>Selected file:</strong> <span id="file-name"></span><br>
+                <strong>Size:</strong> <span id="file-size"></span>
+            </div>
+
+            <button type="submit" class="btn" id="submit-btn" style="margin-top: 20px; width: 100%;">
+                🚀 Start Processing
+            </button>
+
+            <div class="progress-container" id="progress-container">
+                <div class="progress-bar" id="progress-bar"></div>
+                <div class="progress-text" id="progress-text">0%</div>
+            </div>
+        </form>
+    </div>
+
+    <!-- YouTube tab -->
+    <div id="tab-youtube" style="display: none;">
+        {% if not current_user.is_authenticated %}
+        <div style="background:#fff3cd; border:1px solid #ffc107; border-radius:8px; padding:15px; margin-bottom:15px;">
+            ⚠️ <strong>Login required</strong> to use the YouTube feature.
+            <a href="{{ url_for('login') }}">Log in here →</a>
         </div>
-        
-        <div class="file-info" id="file-info">
-            <strong>Selected file:</strong> <span id="file-name"></span><br>
-            <strong>Size:</strong> <span id="file-size"></span>
+        {% else %}
+        <div class="form-group">
+            <label for="youtube_url">YouTube Video URL</label>
+            <input type="text" id="youtube_url" placeholder="https://www.youtube.com/watch?v=..." />
+            <p class="help-text">Paste the full YouTube link. The audio will be downloaded and processed automatically.</p>
         </div>
 
-        <button type="submit" class="btn" id="submit-btn" style="margin-top: 20px; width: 100%;">
-            🚀 Start Processing
+        <button class="btn" id="youtube-submit-btn" onclick="submitYoutube()" style="width: 100%;">
+            ▶ Download &amp; Process
         </button>
 
-        <div class="progress-container" id="progress-container">
-            <div class="progress-bar" id="progress-bar"></div>
-            <div class="progress-text" id="progress-text">0%</div>
+        <div class="progress-container" id="yt-progress-container">
+            <div class="progress-bar pulsing" style="width: 100%;"></div>
+            <div class="progress-text" id="yt-progress-text">Submitting...</div>
         </div>
-    </form>
+        {% endif %}
+    </div>
 </div>
 
 {% if current_user.is_authenticated %}
@@ -211,6 +284,54 @@
 
 {% block extra_js %}
 <script>
+    // Tab switching
+    function switchTab(tab) {
+        document.getElementById('tab-file').style.display = tab === 'file' ? '' : 'none';
+        document.getElementById('tab-youtube').style.display = tab === 'youtube' ? '' : 'none';
+        document.getElementById('tab-btn-file').classList.toggle('active', tab === 'file');
+        document.getElementById('tab-btn-youtube').classList.toggle('active', tab === 'youtube');
+    }
+
+    // YouTube submission
+    async function submitYoutube() {
+        const youtubeUrl = document.getElementById('youtube_url').value.trim();
+        const hfToken = document.getElementById('hf_token').value.trim();
+        const geminiKey = document.getElementById('gemini_key').value.trim();
+
+        if (!youtubeUrl) { alert('Please enter a YouTube URL'); return; }
+        if (!hfToken) { alert('Please enter your HuggingFace token'); return; }
+        if (!geminiKey) { alert('Please enter your Gemini API key'); return; }
+
+        const btn = document.getElementById('youtube-submit-btn');
+        const progressContainer = document.getElementById('yt-progress-container');
+        btn.disabled = true;
+        btn.textContent = '⏳ Submitting...';
+        progressContainer.style.display = 'block';
+        document.getElementById('yt-progress-text').textContent = 'Queuing job...';
+
+        try {
+            const res = await fetch('/youtube', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ youtube_url: youtubeUrl, hf_token: hfToken, gemini_key: geminiKey })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                window.location.href = '/job/' + data.job_id;
+            } else {
+                alert('Error: ' + (data.error || 'Submission failed'));
+                btn.disabled = false;
+                btn.textContent = '▶ Download & Process';
+                progressContainer.style.display = 'none';
+            }
+        } catch (e) {
+            alert('Network error: ' + e.message);
+            btn.disabled = false;
+            btn.textContent = '▶ Download & Process';
+            progressContainer.style.display = 'none';
+        }
+    }
+
     // Queue status banner
     async function updateQueueBanner() {
         try {
